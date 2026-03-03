@@ -1,0 +1,8 @@
+node_modules/
+dist/
+zig-out/
+zig-cache/
+.zig-cache/
+*.wasm
+!wasm/src/
+.DS_Store

@@ -1,0 +1,33 @@
+{
+  "name": "drawmode",
+  "version": "0.1.0",
+  "description": "Code Mode MCP server for generating Excalidraw architecture diagrams with auto-layout",
+  "type": "module",
+  "bin": {
+    "drawmode": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["mcp", "excalidraw", "diagram", "codemode", "architecture", "wasm"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@cloudflare/codemode": "^0.1.0",
+    "@modelcontextprotocol/sdk": "^1.25.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsx": "^4.19.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^22.0.0"
+  }
+}
