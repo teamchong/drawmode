@@ -355,15 +355,15 @@ export class Diagram {
 
     const result: RenderResult = { json: excalidrawJson };
     const format = opts?.format ?? "excalidraw";
+    const { writeFile } = await import("node:fs/promises");
 
-    if (opts?.path || format === "excalidraw") {
+    if (format === "excalidraw") {
       const path = opts?.path ?? "diagram.excalidraw";
-      const { writeFile } = await import("node:fs/promises");
       await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
       result.filePath = path;
 
       // Write sidecar .drawmode.ts if source code provided
-      if (opts?.sourceCode) {
+      if (opts?.sourceCode && path.endsWith(".excalidraw")) {
         const sidecarPath = path.replace(/\.excalidraw$/, ".drawmode.ts");
         await writeFile(sidecarPath, opts.sourceCode);
       }
@@ -377,11 +377,17 @@ export class Diagram {
     if (format === "svg") {
       const { exportToSvg } = await import("./export.js");
       result.svg = exportToSvg(elements);
+      const path = opts?.path ?? "diagram.svg";
+      await writeFile(path, result.svg);
+      result.filePath = path;
     }
 
     if (format === "png") {
       const { exportToPng } = await import("./export.js");
       result.png = await exportToPng(elements);
+      const path = opts?.path ?? "diagram.png";
+      await writeFile(path, result.png);
+      result.filePath = path;
     }
 
     return result;

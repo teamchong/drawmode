@@ -198,52 +198,18 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
       };
     }
 
+    // Return minimal responses to avoid bloating context:
+    // - url format: just the URL
+    // - file formats (excalidraw/svg/png): just the file path
     const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 
-    if (result.url) {
-      parts.push({ type: "text" as const, text: `Excalidraw URL: ${result.url}` });
-    }
-    if (result.filePath) {
-      parts.push({ type: "text" as const, text: `Saved to: ${result.filePath}` });
-    }
-
-    const elementCount = Array.isArray((result.json as { elements?: unknown[] }).elements)
-      ? (result.json as { elements: unknown[] }).elements.length
-      : 0;
-    parts.push({ type: "text" as const, text: `Generated ${elementCount} elements` });
-
-    if (format === "excalidraw") {
-      parts.push({ type: "text" as const, text: JSON.stringify(result.json, null, 2) });
-    }
-
-    if (format === "svg" && result.svg) {
-      parts.push({ type: "text" as const, text: result.svg });
-    }
-
-    if (format === "png" && result.png) {
-      const base64 = Buffer.from(result.png).toString("base64");
-      parts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
-    }
-
-    // Return structuredContent for MCP Apps widget support (only for excalidraw format)
-    const elements = (result.json as { elements?: unknown[] }).elements;
-    if (format === "excalidraw" && elements && Array.isArray(elements) && elements.length > 0) {
-      return {
-        content: parts,
-        structuredContent: {
-          type: "resource" as const,
-          resource: {
-            uri: "ui://widget",
-            mimeType: "text/html",
-          },
-          context: {
-            elements,
-            appState: {
-              viewBackgroundColor: "#ffffff",
-            },
-          },
-        },
-      };
+    if (format === "url" && result.url) {
+      parts.push({ type: "text" as const, text: result.url });
+    } else if (result.filePath) {
+      parts.push({ type: "text" as const, text: result.filePath });
+    } else if (result.url) {
+      // Fallback: if no file path but URL exists
+      parts.push({ type: "text" as const, text: result.url });
     }
 
     return { content: parts };

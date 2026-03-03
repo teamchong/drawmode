@@ -10,7 +10,7 @@
  * Reference: packages/excalidraw/data/encode.ts in excalidraw/excalidraw
  */
 
-import { deflateSync } from "node:zlib";
+import { deflateRawSync } from "node:zlib";
 
 const EXCALIDRAW_API = "https://json.excalidraw.com/api/v2/post/";
 const IV_LENGTH_BYTES = 12;
@@ -69,8 +69,8 @@ export async function uploadToExcalidraw(jsonString: string): Promise<string> {
   const dataBuffer = new TextEncoder().encode(jsonString);
   const innerConcat = concatBuffers(contentsMetadata, dataBuffer);
 
-  // 3. Deflate → encrypt
-  const compressed = deflateSync(Buffer.from(innerConcat));
+  // 3. deflate (raw, no zlib wrapper) → encrypt
+  const compressed = deflateRawSync(innerConcat);
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
   const encryptedBuffer = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },

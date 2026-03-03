@@ -5,7 +5,7 @@ const validate_mod = @import("validate.zig");
 const svg_mod = @import("svg.zig");
 
 /// Bump allocator backed by a fixed buffer (no imports needed for WASM).
-var heap_buf: [512 * 1024]u8 = undefined;
+var heap_buf: [1024 * 1024]u8 = undefined;
 var heap_offset: usize = 0;
 
 export fn alloc(size: usize) usize {

@@ -14,7 +14,14 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["mcp", "excalidraw", "diagram", "codemode", "architecture", "wasm"],
+  "keywords": [
+    "mcp",
+    "excalidraw",
+    "diagram",
+    "codemode",
+    "architecture",
+    "wasm"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=18"
@@ -27,9 +34,9 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
-    "vitest": "^3.0.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.5.0",
+    "vitest": "^3.0.0"
   }
 }

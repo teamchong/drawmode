@@ -6,7 +6,7 @@ const std = @import("std");
 /// Output: SVG string
 pub fn renderSvg(elements_json: []const u8, out: []u8) !usize {
     // Parse elements to find bounding box and render
-    var elems: [256]Elem = undefined;
+    var elems: [512]Elem = undefined;
     var elem_count: usize = 0;
     parseElements(elements_json, &elems, &elem_count);
 
@@ -95,20 +95,73 @@ pub fn renderSvg(elements_json: []const u8, out: []u8) !usize {
             written += copySlice(out[written..], e.stroke);
             written += copySlice(out[written..], "\" stroke-width=\"2\"/>\n");
         } else if (e.elem_type == .text) {
-            // Center text in parent container
-            const tx = e.x;
-            const ty = e.y;
-            written += copySlice(out[written..], "<text x=\"");
-            written += writeInt(out[written..], tx);
-            written += copySlice(out[written..], "\" y=\"");
-            written += writeInt(out[written..], ty);
-            written += copySlice(out[written..], "\" text-anchor=\"middle\" dominant-baseline=\"central\" font-family=\"sans-serif\" font-size=\"");
-            written += writeInt(out[written..], e.font_size);
-            written += copySlice(out[written..], "\" fill=\"");
-            written += copySlice(out[written..], e.stroke);
-            written += copySlice(out[written..], "\">");
-            written += copySlice(out[written..], e.text_content);
-            written += copySlice(out[written..], "</text>\n");
+            // Position text at center of its bounding box
+            const cx = e.x + @divTrunc(e.w, 2);
+            const cy = e.y + @divTrunc(e.h, 2);
+
+            // Count lines by looking for \n (literal backslash-n in JSON)
+            const line_count = countJsonNewlines(e.text_content) + 1;
+            const line_height = @divTrunc(e.font_size * 6, 5); // fontSize * 1.2
+
+            if (line_count == 1) {
+                written += copySlice(out[written..], "<text x=\"");
+                written += writeInt(out[written..], cx);
+                written += copySlice(out[written..], "\" y=\"");
+                written += writeInt(out[written..], cy);
+                written += copySlice(out[written..], "\" text-anchor=\"middle\" dominant-baseline=\"central\" font-family=\"sans-serif\" font-size=\"");
+                written += writeInt(out[written..], e.font_size);
+                written += copySlice(out[written..], "\" fill=\"");
+                written += copySlice(out[written..], e.stroke);
+                written += copySlice(out[written..], "\">");
+                written += writeXmlEscaped(out[written..], e.text_content);
+                written += copySlice(out[written..], "</text>\n");
+            } else {
+                // Multiline: use tspan elements
+                const total_height = line_height * @as(i32, @intCast(line_count));
+                const start_y = cy - @divTrunc(total_height, 2) + @divTrunc(line_height, 2);
+
+                written += copySlice(out[written..], "<text text-anchor=\"middle\" dominant-baseline=\"central\" font-family=\"sans-serif\" font-size=\"");
+                written += writeInt(out[written..], e.font_size);
+                written += copySlice(out[written..], "\" fill=\"");
+                written += copySlice(out[written..], e.stroke);
+                written += copySlice(out[written..], "\">");
+
+                // Split on \n (literal JSON escape) and write tspan elements
+                var line_idx: usize = 0;
+                var text_pos: usize = 0;
+                while (text_pos <= e.text_content.len) {
+                    // Find next \n or end
+                    var end = text_pos;
+                    while (end + 1 < e.text_content.len) {
+                        if (e.text_content[end] == '\\' and e.text_content[end + 1] == 'n') break;
+                        end += 1;
+                    }
+                    if (end + 1 >= e.text_content.len) end = e.text_content.len;
+
+                    const line_text = e.text_content[text_pos..end];
+                    const line_y = start_y + line_height * @as(i32, @intCast(line_idx));
+
+                    written += copySlice(out[written..], "<tspan x=\"");
+                    written += writeInt(out[written..], cx);
+                    written += copySlice(out[written..], "\" y=\"");
+                    written += writeInt(out[written..], line_y);
+                    written += copySlice(out[written..], "\">");
+                    written += writeXmlEscaped(out[written..], line_text);
+                    written += copySlice(out[written..], "</tspan>");
+
+                    line_idx += 1;
+                    // Skip past \n
+                    if (end + 1 < e.text_content.len and
+                        e.text_content[end] == '\\' and e.text_content[end + 1] == 'n')
+                    {
+                        text_pos = end + 2;
+                    } else {
+                        break;
+                    }
+                }
+
+                written += copySlice(out[written..], "</text>\n");
+            }
         } else if (e.elem_type == .arrow) {
             written += copySlice(out[written..], "<path d=\"");
             for (e.points[0..e.point_count], 0..) |pt, pi| {
@@ -153,11 +206,48 @@ const Elem = struct {
     text_content: []const u8,
     font_size: i32,
     is_dashed: bool,
-    points: [8]Point,
+    points: [16]Point,
     point_count: usize,
 };
 
-fn parseElements(json: []const u8, out: *[256]Elem, count: *usize) void {
+/// Count occurrences of literal \n (JSON escaped newline) in text
+fn countJsonNewlines(text: []const u8) usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i + 1 < text.len) : (i += 1) {
+        if (text[i] == '\\' and text[i + 1] == 'n') {
+            count += 1;
+            i += 1; // skip the 'n'
+        }
+    }
+    return count;
+}
+
+/// Write XML-escaped text to output buffer
+fn writeXmlEscaped(dst: []u8, src: []const u8) usize {
+    var written: usize = 0;
+    for (src) |c| {
+        const replacement: ?[]const u8 = switch (c) {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' => "&quot;",
+            else => null,
+        };
+        if (replacement) |r| {
+            if (written + r.len > dst.len) break;
+            @memcpy(dst[written .. written + r.len], r);
+            written += r.len;
+        } else {
+            if (written >= dst.len) break;
+            dst[written] = c;
+            written += 1;
+        }
+    }
+    return written;
+}
+
+fn parseElements(json: []const u8, out: *[512]Elem, count: *usize) void {
     var pos: usize = 0;
 
     while (pos < json.len) : (pos += 1) {
@@ -173,14 +263,14 @@ fn parseElements(json: []const u8, out: *[256]Elem, count: *usize) void {
 
         var elem = Elem{
             .elem_type = .unknown,
-            .x = extractIntField(obj, "x") orelse 0,
-            .y = extractIntField(obj, "y") orelse 0,
-            .w = extractIntField(obj, "width") orelse 0,
-            .h = extractIntField(obj, "height") orelse 0,
+            .x = extractIntField(obj, "\"x\"") orelse 0,
+            .y = extractIntField(obj, "\"y\"") orelse 0,
+            .w = extractIntField(obj, "\"width\"") orelse 0,
+            .h = extractIntField(obj, "\"height\"") orelse 0,
             .fill = extractStringField(obj, "backgroundColor") orelse "#ffffff",
             .stroke = extractStringField(obj, "strokeColor") orelse "#333333",
             .text_content = &.{},
-            .font_size = extractIntField(obj, "fontSize") orelse 16,
+            .font_size = extractIntField(obj, "\"fontSize\"") orelse 16,
             .is_dashed = false,
             .points = undefined,
             .point_count = 0,
@@ -188,7 +278,6 @@ fn parseElements(json: []const u8, out: *[256]Elem, count: *usize) void {
 
         if (std.mem.eql(u8, type_str, "rectangle")) {
             elem.elem_type = .rectangle;
-            // Check if dashed
             const style = extractStringField(obj, "strokeStyle");
             if (style) |s| {
                 if (std.mem.eql(u8, s, "dashed")) {
@@ -208,14 +297,13 @@ fn parseElements(json: []const u8, out: *[256]Elem, count: *usize) void {
                     elem.is_dashed = true;
                 }
             }
-            // Parse points array
             elem.point_count = parsePoints(obj, &elem.points);
         } else {
             pos = obj_end;
             continue;
         }
 
-        if (count.* < 256) {
+        if (count.* < 512) {
             out[count.*] = elem;
             count.* += 1;
         }
@@ -224,8 +312,7 @@ fn parseElements(json: []const u8, out: *[256]Elem, count: *usize) void {
     }
 }
 
-fn parsePoints(obj: []const u8, out: *[8]Point) usize {
-    // Find "points":[ and parse [[x,y],[x,y],...]
+fn parsePoints(obj: []const u8, out: *[16]Point) usize {
     const key = "\"points\"";
     const key_pos = std.mem.indexOf(u8, obj, key) orelse return 0;
     var pos = key_pos + key.len;
@@ -236,20 +323,15 @@ fn parsePoints(obj: []const u8, out: *[8]Point) usize {
     pos += 1; // skip outer [
 
     var count: usize = 0;
-    while (pos < obj.len and count < 8) {
-        // Skip whitespace
+    while (pos < obj.len and count < 16) {
         while (pos < obj.len and (obj[pos] == ' ' or obj[pos] == ',')) : (pos += 1) {}
         if (pos >= obj.len or obj[pos] == ']') break;
         if (obj[pos] != '[') break;
         pos += 1; // skip [
 
-        // Parse x
         const x = parseIntAt(obj, &pos);
-        // Skip comma
         while (pos < obj.len and (obj[pos] == ',' or obj[pos] == ' ')) : (pos += 1) {}
-        // Parse y
         const y = parseIntAt(obj, &pos);
-        // Skip to ]
         while (pos < obj.len and obj[pos] != ']') : (pos += 1) {}
         if (pos < obj.len) pos += 1;
 
@@ -276,11 +358,21 @@ fn parseIntAt(buf: []const u8, pos: *usize) i32 {
 
 fn findMatchingBrace(json: []const u8) usize {
     var depth: i32 = 0;
+    var in_string = false;
+    var prev_backslash = false;
     for (json, 0..) |c, i| {
-        if (c == '{') depth += 1;
-        if (c == '}') {
-            depth -= 1;
-            if (depth == 0) return i + 1;
+        if (in_string) {
+            if (c == '"' and !prev_backslash) {
+                in_string = false;
+            }
+            prev_backslash = (c == '\\' and !prev_backslash);
+        } else {
+            if (c == '"') in_string = true;
+            if (c == '{') depth += 1;
+            if (c == '}') {
+                depth -= 1;
+                if (depth == 0) return i + 1;
+            }
         }
     }
     return json.len;
@@ -298,7 +390,11 @@ fn extractStringField(obj: []const u8, field: []const u8) ?[]const u8 {
             if (j < obj.len and obj[j] == '"') {
                 j += 1;
                 const start = j;
-                while (j < obj.len and obj[j] != '"') : (j += 1) {}
+                // Handle escaped quotes in strings
+                while (j < obj.len) {
+                    if (obj[j] == '"' and (j == start or obj[j - 1] != '\\')) break;
+                    j += 1;
+                }
                 return obj[start..j];
             }
         }
@@ -306,31 +402,25 @@ fn extractStringField(obj: []const u8, field: []const u8) ?[]const u8 {
     return null;
 }
 
-fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
-    var i: usize = 0;
-    while (i + field.len + 3 < obj.len) : (i += 1) {
-        if (obj[i] == '"' and i + 1 + field.len < obj.len and
-            std.mem.eql(u8, obj[i + 1 .. i + 1 + field.len], field) and
-            obj[i + 1 + field.len] == '"')
-        {
-            var j = i + 1 + field.len + 1;
-            while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
-            if (j >= obj.len) return null;
-            if (j + 4 <= obj.len and std.mem.eql(u8, obj[j .. j + 4], "null")) return null;
+fn extractIntField(obj: []const u8, field_with_quotes: []const u8) ?i32 {
+    // field_with_quotes includes the surrounding quotes, e.g. "\"x\""
+    const key_pos = std.mem.indexOf(u8, obj, field_with_quotes) orelse return null;
+    var j = key_pos + field_with_quotes.len;
 
-            var negative = false;
-            if (obj[j] == '-') {
-                negative = true;
-                j += 1;
-            }
-            var val: i32 = 0;
-            while (j < obj.len and obj[j] >= '0' and obj[j] <= '9') : (j += 1) {
-                val = val * 10 + @as(i32, @intCast(obj[j] - '0'));
-            }
-            return if (negative) -val else val;
-        }
+    while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
+    if (j >= obj.len) return null;
+    if (j + 4 <= obj.len and std.mem.eql(u8, obj[j .. j + 4], "null")) return null;
+
+    var negative = false;
+    if (obj[j] == '-') {
+        negative = true;
+        j += 1;
     }
-    return null;
+    var val: i32 = 0;
+    while (j < obj.len and obj[j] >= '0' and obj[j] <= '9') : (j += 1) {
+        val = val * 10 + @as(i32, @intCast(obj[j] - '0'));
+    }
+    return if (negative) -val else val;
 }
 
 fn copySlice(dst: []u8, src: []const u8) usize {
@@ -373,14 +463,40 @@ fn writeInt(dst: []u8, val: i32) usize {
 test "renderSvg basic" {
     const elements =
         \\[{"id":"box1","type":"rectangle","x":100,"y":100,"width":180,"height":80,"backgroundColor":"#d0bfff","strokeColor":"#7048e8","strokeStyle":"solid"},
-        \\{"id":"box1-text","type":"text","x":190,"y":140,"width":160,"height":20,"text":"API","fontSize":16,"strokeColor":"#7048e8"}]
+        \\{"id":"box1-text","type":"text","x":110,"y":130,"width":160,"height":20,"text":"API","fontSize":16,"strokeColor":"#7048e8"}]
     ;
-    var out: [8192]u8 = undefined;
-    const written = try renderSvg(elements, &out);
+    var out_buf: [8192]u8 = undefined;
+    const written = try renderSvg(elements, &out_buf);
     try std.testing.expect(written > 0);
-    const result = out[0..written];
+    const result = out_buf[0..written];
     try std.testing.expect(std.mem.indexOf(u8, result, "<svg") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "<rect") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "API") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "</svg>") != null);
+}
+
+test "renderSvg multiline text" {
+    const elements =
+        \\[{"id":"box1","type":"rectangle","x":100,"y":100,"width":180,"height":80,"backgroundColor":"#d0bfff","strokeColor":"#7048e8","strokeStyle":"solid"},
+        \\{"id":"box1-text","type":"text","x":110,"y":130,"width":160,"height":20,"text":"Line 1\\nLine 2","fontSize":16,"strokeColor":"#7048e8"}]
+    ;
+    var out_buf: [8192]u8 = undefined;
+    const written = try renderSvg(elements, &out_buf);
+    try std.testing.expect(written > 0);
+    const result = out_buf[0..written];
+    try std.testing.expect(std.mem.indexOf(u8, result, "<tspan") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Line 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Line 2") != null);
+}
+
+test "renderSvg xml escaping" {
+    const elements =
+        \\[{"id":"t1","type":"text","x":0,"y":0,"width":100,"height":20,"text":"A & B <C>","fontSize":16,"strokeColor":"#333"}]
+    ;
+    var out_buf: [8192]u8 = undefined;
+    const written = try renderSvg(elements, &out_buf);
+    const result = out_buf[0..written];
+    try std.testing.expect(std.mem.indexOf(u8, result, "&amp;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "&lt;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "&gt;") != null);
 }
