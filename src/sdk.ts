@@ -485,13 +485,16 @@ export class Diagram {
         versionNonce: randSeed(),
       });
 
+      const textWidth = node.width - 20;
+      const textHeight = 20;
+
       elements.push({
         id: textId,
         type: "text",
-        x: node.x! + node.width / 2,
-        y: node.y! + node.height / 2,
-        width: node.width - 20,
-        height: 20,
+        x: node.x! + (node.width - textWidth) / 2,
+        y: node.y! + (node.height - textHeight) / 2,
+        width: textWidth,
+        height: textHeight,
         text: node.label,
         fontSize: o?.fontSize ?? 16,
         fontFamily: o?.fontFamily ?? 1,

@@ -225,9 +225,9 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
       parts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
     }
 
-    // Return structuredContent for MCP Apps widget support
+    // Return structuredContent for MCP Apps widget support (only for excalidraw format)
     const elements = (result.json as { elements?: unknown[] }).elements;
-    if (elements && Array.isArray(elements) && elements.length > 0) {
+    if (format === "excalidraw" && elements && Array.isArray(elements) && elements.length > 0) {
       return {
         content: parts,
         structuredContent: {
