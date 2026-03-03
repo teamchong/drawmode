@@ -9,7 +9,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/widget.html dist/widget.html",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
@@ -21,7 +21,9 @@
   },
   "dependencies": {
     "@cloudflare/codemode": "^0.1.0",
+    "@modelcontextprotocol/ext-apps": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.25.0",
+    "@resvg/resvg-js": "^2.6.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {

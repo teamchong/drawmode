@@ -19,6 +19,7 @@ interface WasmLayoutExports {
   layoutGraph: (nodesPtr: number, nodesLen: number, edgesPtr: number, edgesLen: number, outPtr: number, outCap: number) => number;
   routeArrows: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
   validate: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
+  renderSvg: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
 }
 
 let wasmInstance: WasmLayoutExports | null = null;
@@ -117,6 +118,28 @@ export function validateElements(elementsJson: string): string | null {
   const outPtr = wasmInstance.alloc(outCap);
 
   const written = wasmInstance.validate(elemPtr, elemBytes.byteLength, outPtr, outCap);
+  const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
+
+  wasmInstance.dealloc(elemPtr, elemBytes.byteLength);
+  wasmInstance.dealloc(outPtr, outCap);
+
+  return result;
+}
+
+/**
+ * Render Excalidraw elements to SVG using WASM.
+ * Returns SVG string, or null if WASM unavailable.
+ */
+export function renderSvg(elementsJson: string): string | null {
+  if (!wasmInstance) return null;
+
+  const elemBytes = new TextEncoder().encode(elementsJson);
+  const outCap = 256 * 1024; // 256KB for SVG output
+
+  const elemPtr = writeToWasm(elemBytes);
+  const outPtr = wasmInstance.alloc(outCap);
+
+  const written = wasmInstance.renderSvg(elemPtr, elemBytes.byteLength, outPtr, outCap);
   const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
 
   wasmInstance.dealloc(elemPtr, elemBytes.byteLength);

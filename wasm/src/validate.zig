@@ -20,6 +20,10 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
     var binding_refs: [256][]const u8 = undefined;
     var binding_count: usize = 0;
 
+    // Shape bounding boxes for overlap check
+    var shape_rects: [256]ShapeRect = undefined;
+    var shape_rect_count: usize = 0;
+
     // Parse all elements
     var pos: usize = 0;
     while (pos < elements_json.len) : (pos += 1) {
@@ -74,6 +78,22 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
                         binding_refs[binding_count] = r;
                         binding_count += 1;
                     }
+                }
+            }
+
+            // Collect shape bounding boxes for overlap check (non-text shapes)
+            if ((std.mem.eql(u8, t, "rectangle") or std.mem.eql(u8, t, "ellipse")) and
+                container == null) // exclude text containers from overlap
+            {
+                if (shape_rect_count < 256) {
+                    shape_rects[shape_rect_count] = .{
+                        .id_slice = id orelse &.{},
+                        .x = extractIntField(obj, "x") orelse 0,
+                        .y = extractIntField(obj, "y") orelse 0,
+                        .w = extractIntField(obj, "width") orelse 0,
+                        .h = extractIntField(obj, "height") orelse 0,
+                    };
+                    shape_rect_count += 1;
                 }
             }
         }
@@ -137,12 +157,49 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
         }
     }
 
+    // Check 4: overlapping shapes (5px margin tolerance)
+    const margin: i32 = 5;
+    for (shape_rects[0..shape_rect_count], 0..) |a, ai| {
+        for (shape_rects[ai + 1 .. shape_rect_count]) |b| {
+            // Check if bounding boxes overlap (allowing margin)
+            const a_right = a.x + a.w - margin;
+            const a_bottom = a.y + a.h - margin;
+            const b_right = b.x + b.w - margin;
+            const b_bottom = b.y + b.h - margin;
+
+            const a_left = a.x + margin;
+            const a_top = a.y + margin;
+            const b_left = b.x + margin;
+            const b_top = b.y + margin;
+
+            if (a_left < b_right and a_right > b_left and
+                a_top < b_bottom and a_bottom > b_top)
+            {
+                if (error_count > 0) written += copySlice(out[written..], ",");
+                written += copySlice(out[written..], "{\"type\":\"overlap\",\"id\":\"");
+                written += copySlice(out[written..], a.id_slice);
+                written += copySlice(out[written..], "\",\"msg\":\"Shape overlaps with ");
+                written += copySlice(out[written..], b.id_slice);
+                written += copySlice(out[written..], "\"}");
+                error_count += 1;
+            }
+        }
+    }
+
     written += copySlice(out[written..], "]");
 
     // Return 0 if no errors (caller interprets as "all valid")
     if (error_count == 0) return 0;
     return written;
 }
+
+const ShapeRect = struct {
+    id_slice: []const u8,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+};
 
 fn findMatchingBrace(json: []const u8) usize {
     var depth: i32 = 0;
@@ -193,6 +250,33 @@ fn extractNestedStringField(obj: []const u8, outer: []const u8, inner: []const u
     return null;
 }
 
+fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
+    var i: usize = 0;
+    while (i + field.len + 3 < obj.len) : (i += 1) {
+        if (obj[i] == '"' and i + 1 + field.len < obj.len and
+            std.mem.eql(u8, obj[i + 1 .. i + 1 + field.len], field) and
+            obj[i + 1 + field.len] == '"')
+        {
+            var j = i + 1 + field.len + 1;
+            while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
+            if (j >= obj.len) return null;
+            if (j + 4 <= obj.len and std.mem.eql(u8, obj[j .. j + 4], "null")) return null;
+
+            var negative = false;
+            if (obj[j] == '-') {
+                negative = true;
+                j += 1;
+            }
+            var val: i32 = 0;
+            while (j < obj.len and obj[j] >= '0' and obj[j] <= '9') : (j += 1) {
+                val = val * 10 + @as(i32, @intCast(obj[j] - '0'));
+            }
+            return if (negative) -val else val;
+        }
+    }
+    return null;
+}
+
 fn copySlice(dst: []u8, src: []const u8) usize {
     if (dst.len < src.len) return 0;
     @memcpy(dst[0..src.len], src);
@@ -217,4 +301,26 @@ test "validate missing text" {
     const written = try validate(elements, &out);
     try std.testing.expect(written > 0);
     try std.testing.expect(std.mem.indexOf(u8, out[0..written], "missing_text") != null);
+}
+
+test "validate overlap detection" {
+    // Two rectangles at the same position should overlap
+    const elements =
+        \\[{"id":"a","type":"rectangle","x":100,"y":100,"width":180,"height":80},
+        \\{"id":"b","type":"rectangle","x":110,"y":110,"width":180,"height":80}]
+    ;
+    var out: [4096]u8 = undefined;
+    const written = try validate(elements, &out);
+    try std.testing.expect(written > 0);
+    try std.testing.expect(std.mem.indexOf(u8, out[0..written], "overlap") != null);
+}
+
+test "validate no overlap when far apart" {
+    const elements =
+        \\[{"id":"a","type":"rectangle","x":100,"y":100,"width":180,"height":80},
+        \\{"id":"b","type":"rectangle","x":500,"y":500,"width":180,"height":80}]
+    ;
+    var out: [4096]u8 = undefined;
+    const written = try validate(elements, &out);
+    try std.testing.expectEqual(@as(usize, 0), written);
 }

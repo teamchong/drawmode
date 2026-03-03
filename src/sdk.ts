@@ -5,9 +5,11 @@
 
 import type {
   ColorPreset, ShapeOpts, ConnectOpts, RenderOpts, RenderResult,
-  GraphNode, GraphEdge,
+  GraphNode, GraphEdge, FillStyle, StrokeStyle, FontFamily,
+  Arrowhead, TextAlign, VerticalAlign, ColorPair,
 } from "./types.js";
 import { COLOR_PALETTE } from "./types.js";
+import { layoutGraph, validateElements, isWasmLoaded } from "./layout.js";
 
 const DEFAULT_WIDTH = 180;
 const DEFAULT_HEIGHT = 80;
@@ -21,21 +23,30 @@ function nextId(prefix: string): string {
   return `${prefix}_${++idCounter}_${Date.now().toString(36)}`;
 }
 
+function randSeed(): number {
+  return Math.floor(Math.random() * 2000000000);
+}
+
 export class Diagram {
   private nodes = new Map<string, GraphNode>();
   private edges: GraphEdge[] = [];
   private groups = new Map<string, { label: string; children: string[] }>();
+  /** Passthrough elements from fromFile() — re-emitted unchanged */
+  private passthrough: object[] = [];
 
   /** Add a rectangle to the diagram. Returns the element ID. */
   addBox(label: string, opts?: ShapeOpts): string {
     const id = nextId("box");
-    const color = COLOR_PALETTE[opts?.color ?? "backend"];
+    const color = resolveColor(opts);
     this.nodes.set(id, {
       id, label, type: "rectangle",
       row: opts?.row, col: opts?.col,
       width: opts?.width ?? DEFAULT_WIDTH,
       height: opts?.height ?? DEFAULT_HEIGHT,
       color,
+      opts,
+      absX: opts?.x,
+      absY: opts?.y,
     });
     return id;
   }
@@ -43,13 +54,64 @@ export class Diagram {
   /** Add an ellipse to the diagram. Returns the element ID. */
   addEllipse(label: string, opts?: ShapeOpts): string {
     const id = nextId("ell");
-    const color = COLOR_PALETTE[opts?.color ?? "users"];
+    const defaultPreset: ColorPreset = "users";
+    const color = resolveColor(opts, defaultPreset);
     this.nodes.set(id, {
       id, label, type: "ellipse",
       row: opts?.row, col: opts?.col,
       width: opts?.width ?? DEFAULT_WIDTH,
       height: opts?.height ?? DEFAULT_HEIGHT,
       color,
+      opts,
+      absX: opts?.x,
+      absY: opts?.y,
+    });
+    return id;
+  }
+
+  /** Add standalone text (no container shape). Returns the element ID. */
+  addText(text: string, opts?: {
+    x?: number; y?: number;
+    fontSize?: number; fontFamily?: FontFamily;
+    color?: ColorPreset; strokeColor?: string;
+  }): string {
+    const id = nextId("txt");
+    const preset = opts?.color ?? "backend";
+    const paletteColor = COLOR_PALETTE[preset];
+    const strokeColor = opts?.strokeColor ?? paletteColor.stroke;
+    this.nodes.set(id, {
+      id, label: text, type: "text",
+      width: text.length * (opts?.fontSize ?? 16) * 0.6 + 16,
+      height: (opts?.fontSize ?? 16) + 8,
+      color: { background: "transparent", stroke: strokeColor },
+      opts: { x: opts?.x, y: opts?.y, fontSize: opts?.fontSize, fontFamily: opts?.fontFamily },
+      absX: opts?.x,
+      absY: opts?.y,
+    });
+    return id;
+  }
+
+  /** Add a line element (for dividers/boundaries). Returns the element ID. */
+  addLine(points: [number, number][], opts?: {
+    strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle;
+  }): string {
+    const id = nextId("line");
+    // Compute bounding box
+    const xs = points.map(p => p[0]);
+    const ys = points.map(p => p[1]);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const maxX = Math.max(...xs);
+    const maxY = Math.max(...ys);
+    this.nodes.set(id, {
+      id, label: "", type: "line",
+      width: maxX - minX || 1,
+      height: maxY - minY || 1,
+      color: { background: "transparent", stroke: opts?.strokeColor ?? "#868e96" },
+      opts: { strokeWidth: opts?.strokeWidth, strokeStyle: opts?.strokeStyle },
+      absX: minX,
+      absY: minY,
+      linePoints: points.map(p => [p[0] - minX, p[1] - minY] as [number, number]),
     });
     return id;
   }
@@ -63,12 +125,225 @@ export class Diagram {
 
   /** Connect two elements with an arrow. */
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void {
-    this.edges.push({ from, to, label, style: opts?.style ?? "solid" });
+    this.edges.push({
+      from, to, label,
+      style: opts?.style ?? "solid",
+      opts,
+    });
+  }
+
+  // ── Editing / Query Methods ──
+
+  /** Load an existing .excalidraw file for editing. */
+  static async fromFile(path: string): Promise<Diagram> {
+    const { readFile } = await import("node:fs/promises");
+
+    // Check for sidecar .drawmode.ts first
+    const sidecarPath = path.replace(/\.excalidraw$/, ".drawmode.ts");
+    try {
+      const { stat } = await import("node:fs/promises");
+      await stat(sidecarPath);
+      // Sidecar exists — but we still parse JSON so caller can edit
+    } catch {
+      // No sidecar, fine
+    }
+
+    const raw = await readFile(path, "utf-8");
+    const json = JSON.parse(raw);
+    const elements: Record<string, unknown>[] = json.elements ?? [];
+
+    const d = new Diagram();
+
+    // Index text elements by containerId for label lookup
+    const textByContainer = new Map<string, Record<string, unknown>>();
+    for (const el of elements) {
+      if (el.type === "text" && el.containerId) {
+        textByContainer.set(el.containerId as string, el);
+      }
+    }
+
+    // Reconstruct nodes from shapes
+    for (const el of elements) {
+      const elType = el.type as string;
+      const elId = el.id as string;
+
+      if (elType === "rectangle" || elType === "ellipse") {
+        // Check if this is a group boundary (dashed + low opacity)
+        if (el.strokeStyle === "dashed" && (el.opacity as number) <= 50) {
+          const labelEl = elements.find(
+            e => e.type === "text" && e.id === `${elId}-label`,
+          );
+          d.groups.set(elId, {
+            label: (labelEl?.text as string) ?? "",
+            children: [], // We can't perfectly reconstruct children from JSON
+          });
+          continue;
+        }
+
+        const boundText = textByContainer.get(elId);
+        const label = (boundText?.text as string) ?? "";
+
+        const node: GraphNode = {
+          id: elId,
+          label,
+          type: elType,
+          width: el.width as number,
+          height: el.height as number,
+          color: {
+            background: el.backgroundColor as string,
+            stroke: el.strokeColor as string,
+          },
+          opts: {
+            fillStyle: el.fillStyle as FillStyle | undefined,
+            strokeWidth: el.strokeWidth as number | undefined,
+            strokeStyle: el.strokeStyle as StrokeStyle | undefined,
+            roughness: el.roughness as number | undefined,
+            opacity: el.opacity as number | undefined,
+            roundness: el.roundness as { type: number } | null | undefined,
+            strokeColor: el.strokeColor as string | undefined,
+            backgroundColor: el.backgroundColor as string | undefined,
+            fontSize: boundText?.fontSize as number | undefined,
+            fontFamily: boundText?.fontFamily as FontFamily | undefined,
+            textAlign: boundText?.textAlign as TextAlign | undefined,
+            verticalAlign: boundText?.verticalAlign as VerticalAlign | undefined,
+          },
+          absX: el.x as number,
+          absY: el.y as number,
+        };
+        d.nodes.set(elId, node);
+      } else if (elType === "arrow") {
+        const startId = (el.startBinding as { elementId?: string })?.elementId;
+        const endId = (el.endBinding as { elementId?: string })?.elementId;
+        if (startId && endId) {
+          const arrowLabel = textByContainer.get(elId);
+          d.edges.push({
+            from: startId,
+            to: endId,
+            label: arrowLabel?.text as string | undefined,
+            style: (el.strokeStyle as StrokeStyle) ?? "solid",
+            opts: {
+              strokeColor: el.strokeColor as string | undefined,
+              strokeWidth: el.strokeWidth as number | undefined,
+              roughness: el.roughness as number | undefined,
+              opacity: el.opacity as number | undefined,
+              startArrowhead: el.startArrowhead as Arrowhead | undefined,
+              endArrowhead: el.endArrowhead as Arrowhead | undefined,
+              elbowed: el.elbowed as boolean | undefined,
+              labelFontSize: arrowLabel?.fontSize as number | undefined,
+            },
+          });
+        } else {
+          // Arrow without both bindings — passthrough
+          d.passthrough.push(el);
+        }
+      } else if (elType === "text" && !el.containerId) {
+        // Standalone text — add as text node
+        d.nodes.set(elId, {
+          id: elId,
+          label: el.text as string,
+          type: "text",
+          width: el.width as number,
+          height: el.height as number,
+          color: { background: "transparent", stroke: el.strokeColor as string },
+          opts: { fontSize: el.fontSize as number, fontFamily: el.fontFamily as FontFamily },
+          absX: el.x as number,
+          absY: el.y as number,
+        });
+      } else if (elType === "text" && el.containerId) {
+        // Bound text — already handled via textByContainer, skip
+      } else {
+        // Unknown element type — passthrough
+        d.passthrough.push(el);
+      }
+    }
+
+    return d;
+  }
+
+  /** Find node IDs by label substring match. */
+  findByLabel(label: string): string[] {
+    const lower = label.toLowerCase();
+    const results: string[] = [];
+    for (const node of this.nodes.values()) {
+      if (node.label.toLowerCase().includes(lower)) {
+        results.push(node.id);
+      }
+    }
+    return results;
+  }
+
+  /** Get all node IDs. */
+  getNodes(): string[] {
+    return Array.from(this.nodes.keys());
+  }
+
+  /** Get all edges. */
+  getEdges(): Array<{ from: string; to: string; label?: string }> {
+    return this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
+  }
+
+  /** Update a node's properties. */
+  updateNode(id: string, update: Partial<ShapeOpts> & { label?: string }): void {
+    const node = this.nodes.get(id);
+    if (!node) throw new Error(`Node not found: ${id}`);
+
+    if (update.label !== undefined) node.label = update.label;
+    if (update.width !== undefined) node.width = update.width;
+    if (update.height !== undefined) node.height = update.height;
+    if (update.x !== undefined) node.absX = update.x;
+    if (update.y !== undefined) node.absY = update.y;
+
+    // Update color
+    if (update.color) {
+      node.color = COLOR_PALETTE[update.color];
+    }
+    if (update.strokeColor) {
+      node.color = { ...node.color, stroke: update.strokeColor };
+    }
+    if (update.backgroundColor) {
+      node.color = { ...node.color, background: update.backgroundColor };
+    }
+
+    // Merge remaining opts
+    node.opts = { ...node.opts, ...update };
+  }
+
+  /** Remove a node and all its connected edges. */
+  removeNode(id: string): void {
+    this.nodes.delete(id);
+    this.edges = this.edges.filter(e => e.from !== id && e.to !== id);
+    // Also remove from groups
+    for (const group of this.groups.values()) {
+      group.children = group.children.filter(c => c !== id);
+    }
+  }
+
+  /** Remove an edge between two nodes. */
+  removeEdge(from: string, to: string): void {
+    this.edges = this.edges.filter(e => !(e.from === from && e.to === to));
   }
 
   /** Render the diagram to the specified format. */
   async render(opts?: RenderOpts): Promise<RenderResult> {
     const elements = this.buildElements();
+
+    // WASM validation: log warnings to stderr if available
+    if (isWasmLoaded()) {
+      const errorsJson = validateElements(JSON.stringify(elements));
+      if (errorsJson) {
+        try {
+          const errors = JSON.parse(errorsJson);
+          if (Array.isArray(errors) && errors.length > 0) {
+            for (const err of errors) {
+              process.stderr.write(`[drawmode] validation warning: ${err.msg} (${err.id})\n`);
+            }
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+    }
+
     const excalidrawJson = {
       type: "excalidraw",
       version: 2,
@@ -86,11 +361,27 @@ export class Diagram {
       const { writeFile } = await import("node:fs/promises");
       await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
       result.filePath = path;
+
+      // Write sidecar .drawmode.ts if source code provided
+      if (opts?.sourceCode) {
+        const sidecarPath = path.replace(/\.excalidraw$/, ".drawmode.ts");
+        await writeFile(sidecarPath, opts.sourceCode);
+      }
     }
 
     if (format === "url") {
       const { uploadToExcalidraw } = await import("./upload.js");
       result.url = await uploadToExcalidraw(JSON.stringify(excalidrawJson));
+    }
+
+    if (format === "svg") {
+      const { exportToSvg } = await import("./export.js");
+      result.svg = exportToSvg(elements);
+    }
+
+    if (format === "png") {
+      const { exportToPng } = await import("./export.js");
+      result.png = await exportToPng(elements);
     }
 
     return result;
@@ -103,6 +394,72 @@ export class Diagram {
 
     // Create shape + bound text for each node
     for (const node of positioned.values()) {
+      const o = node.opts;
+
+      // Standalone text node
+      if (node.type === "text") {
+        elements.push({
+          id: node.id,
+          type: "text",
+          x: node.x!, y: node.y!,
+          width: node.width,
+          height: node.height,
+          text: node.label,
+          fontSize: o?.fontSize ?? 16,
+          fontFamily: o?.fontFamily ?? 1,
+          textAlign: o?.textAlign ?? "left",
+          verticalAlign: o?.verticalAlign ?? "top",
+          containerId: null,
+          originalText: node.label,
+          autoResize: true,
+          strokeColor: node.color.stroke,
+          backgroundColor: "transparent",
+          fillStyle: "solid",
+          strokeWidth: 1,
+          roughness: 0,
+          opacity: o?.opacity ?? 100,
+          angle: 0,
+          groupIds: [],
+          frameId: null,
+          isDeleted: false,
+          boundElements: null,
+          seed: randSeed(),
+          version: 1,
+          versionNonce: randSeed(),
+        });
+        continue;
+      }
+
+      // Line element
+      if (node.type === "line") {
+        elements.push({
+          id: node.id,
+          type: "line",
+          x: node.x!, y: node.y!,
+          width: node.width,
+          height: node.height,
+          points: node.linePoints ?? [[0, 0], [node.width, 0]],
+          strokeColor: node.color.stroke,
+          backgroundColor: "transparent",
+          fillStyle: "solid",
+          strokeWidth: o?.strokeWidth ?? 2,
+          strokeStyle: o?.strokeStyle ?? "solid",
+          roughness: o?.roughness ?? 1,
+          opacity: o?.opacity ?? 100,
+          angle: 0,
+          roundness: null,
+          groupIds: [],
+          frameId: null,
+          isDeleted: false,
+          boundElements: null,
+          seed: randSeed(),
+          version: 1,
+          versionNonce: randSeed(),
+        });
+        continue;
+      }
+
+      // Rectangle / Ellipse
       const textId = `${node.id}-text`;
 
       elements.push({
@@ -110,22 +467,22 @@ export class Diagram {
         type: node.type,
         x: node.x!, y: node.y!,
         width: node.width, height: node.height,
-        backgroundColor: node.color.background,
-        strokeColor: node.color.stroke,
-        fillStyle: "solid",
-        strokeWidth: 2,
-        roughness: 1,
-        opacity: 100,
+        backgroundColor: o?.backgroundColor ?? node.color.background,
+        strokeColor: o?.strokeColor ?? node.color.stroke,
+        fillStyle: o?.fillStyle ?? "solid",
+        strokeWidth: o?.strokeWidth ?? 2,
+        roughness: o?.roughness ?? 1,
+        opacity: o?.opacity ?? 100,
         angle: 0,
-        strokeStyle: "solid",
-        roundness: { type: 3 },
+        strokeStyle: o?.strokeStyle ?? "solid",
+        roundness: o?.roundness !== undefined ? o.roundness : { type: 3 },
         boundElements: [{ type: "text", id: textId }],
         groupIds: [],
         frameId: null,
         isDeleted: false,
-        seed: Math.floor(Math.random() * 2000000000),
+        seed: randSeed(),
         version: 1,
-        versionNonce: Math.floor(Math.random() * 2000000000),
+        versionNonce: randSeed(),
       });
 
       elements.push({
@@ -136,27 +493,27 @@ export class Diagram {
         width: node.width - 20,
         height: 20,
         text: node.label,
-        fontSize: 16,
-        fontFamily: 1,
-        textAlign: "center",
-        verticalAlign: "middle",
+        fontSize: o?.fontSize ?? 16,
+        fontFamily: o?.fontFamily ?? 1,
+        textAlign: o?.textAlign ?? "center",
+        verticalAlign: o?.verticalAlign ?? "middle",
         containerId: node.id,
         originalText: node.label,
         autoResize: true,
-        strokeColor: node.color.stroke,
+        strokeColor: o?.strokeColor ?? node.color.stroke,
         backgroundColor: "transparent",
         fillStyle: "solid",
         strokeWidth: 1,
         roughness: 0,
-        opacity: 100,
+        opacity: o?.opacity ?? 100,
         angle: 0,
         groupIds: [],
         frameId: null,
         isDeleted: false,
         boundElements: null,
-        seed: Math.floor(Math.random() * 2000000000),
+        seed: randSeed(),
         version: 1,
-        versionNonce: Math.floor(Math.random() * 2000000000),
+        versionNonce: randSeed(),
       });
     }
 
@@ -165,7 +522,6 @@ export class Diagram {
     const edgeIndexes = new Map<string, number>();
 
     for (const edge of this.edges) {
-      const key = `${edge.from}->${edge.to}`;
       edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
     }
 
@@ -174,10 +530,13 @@ export class Diagram {
       const toNode = positioned.get(edge.to);
       if (!fromNode || !toNode) continue;
 
+      const co = edge.opts;
       const arrowId = nextId("arr");
       const outCount = edgeCounts.get(edge.from) ?? 1;
       const outIdx = edgeIndexes.get(edge.from) ?? 0;
       edgeIndexes.set(edge.from, outIdx + 1);
+
+      const isElbowed = co?.elbowed !== false; // default true
 
       // Determine source/target edges and calculate staggered positions
       const { sourcePoint, targetPoint, sourceEdge, targetEdge } =
@@ -188,19 +547,24 @@ export class Diagram {
 
       // Elbow routing
       let points: number[][];
-      if (sourceEdge === "bottom" && targetEdge === "top") {
-        if (Math.abs(dx) < 10) {
-          points = [[0, 0], [0, dy]];
+      if (isElbowed) {
+        if (sourceEdge === "bottom" && targetEdge === "top") {
+          if (Math.abs(dx) < 10) {
+            points = [[0, 0], [0, dy]];
+          } else {
+            points = [[0, 0], [dx, 0], [dx, dy]];
+          }
+        } else if (sourceEdge === "right" && targetEdge === "left") {
+          if (Math.abs(dy) < 10) {
+            points = [[0, 0], [dx, 0]];
+          } else {
+            points = [[0, 0], [0, dy], [dx, dy]];
+          }
         } else {
-          points = [[0, 0], [dx, 0], [dx, dy]];
-        }
-      } else if (sourceEdge === "right" && targetEdge === "left") {
-        if (Math.abs(dy) < 10) {
-          points = [[0, 0], [dx, 0]];
-        } else {
-          points = [[0, 0], [0, dy], [dx, dy]];
+          points = [[0, 0], [dx, dy]];
         }
       } else {
+        // Straight arrow
         points = [[0, 0], [dx, dy]];
       }
 
@@ -208,6 +572,8 @@ export class Diagram {
       const allY = points.map(p => p[1]);
       const boundsWidth = Math.max(...allX) - Math.min(...allX);
       const boundsHeight = Math.max(...allY) - Math.min(...allY);
+
+      const labelTextId = edge.label ? nextId("arrlbl") : undefined;
 
       elements.push({
         id: arrowId,
@@ -217,28 +583,64 @@ export class Diagram {
         width: boundsWidth || 1,
         height: boundsHeight || 1,
         points,
-        strokeColor: toNode.color.stroke,
+        strokeColor: co?.strokeColor ?? toNode.color.stroke,
         backgroundColor: "transparent",
         fillStyle: "solid",
-        strokeWidth: 2,
+        strokeWidth: co?.strokeWidth ?? 2,
         strokeStyle: edge.style,
-        roughness: 0,
-        roundness: null,
-        elbowed: true,
-        opacity: 100,
+        roughness: co?.roughness ?? 0,
+        roundness: isElbowed ? null : undefined,
+        elbowed: isElbowed,
+        opacity: co?.opacity ?? 100,
         angle: 0,
         startBinding: { elementId: edge.from, focus: 0, gap: 1, fixedPoint: null },
         endBinding: { elementId: edge.to, focus: 0, gap: 1, fixedPoint: null },
-        startArrowhead: null,
-        endArrowhead: "arrow",
+        startArrowhead: co?.startArrowhead ?? null,
+        endArrowhead: co?.endArrowhead ?? "arrow",
         groupIds: [],
         frameId: null,
         isDeleted: false,
-        boundElements: null,
-        seed: Math.floor(Math.random() * 2000000000),
+        boundElements: labelTextId ? [{ type: "text", id: labelTextId }] : null,
+        seed: randSeed(),
         version: 1,
-        versionNonce: Math.floor(Math.random() * 2000000000),
+        versionNonce: randSeed(),
       });
+
+      // Arrow label: bound text element at midpoint of arrow path
+      if (edge.label && labelTextId) {
+        const midIdx = Math.floor(points.length / 2);
+        const midPt = points[midIdx];
+        elements.push({
+          id: labelTextId,
+          type: "text",
+          x: sourcePoint.x + midPt[0],
+          y: sourcePoint.y + midPt[1] - 10,
+          width: edge.label.length * 8 + 16,
+          height: 20,
+          text: edge.label,
+          fontSize: co?.labelFontSize ?? 14,
+          fontFamily: 1,
+          textAlign: "center",
+          verticalAlign: "middle",
+          containerId: arrowId,
+          originalText: edge.label,
+          autoResize: true,
+          strokeColor: co?.strokeColor ?? toNode.color.stroke,
+          backgroundColor: "transparent",
+          fillStyle: "solid",
+          strokeWidth: 1,
+          roughness: 0,
+          opacity: co?.opacity ?? 100,
+          angle: 0,
+          groupIds: [],
+          frameId: null,
+          isDeleted: false,
+          boundElements: null,
+          seed: randSeed(),
+          version: 1,
+          versionNonce: randSeed(),
+        });
+      }
     }
 
     // Groups: dashed rectangle around children + label
@@ -272,9 +674,9 @@ export class Diagram {
         groupIds: [],
         frameId: null,
         isDeleted: false,
-        seed: Math.floor(Math.random() * 2000000000),
+        seed: randSeed(),
         version: 1,
-        versionNonce: Math.floor(Math.random() * 2000000000),
+        versionNonce: randSeed(),
       });
 
       elements.push({
@@ -301,32 +703,92 @@ export class Diagram {
         frameId: null,
         isDeleted: false,
         boundElements: null,
-        seed: Math.floor(Math.random() * 2000000000),
+        seed: randSeed(),
         version: 1,
-        versionNonce: Math.floor(Math.random() * 2000000000),
+        versionNonce: randSeed(),
       });
     }
+
+    // Append passthrough elements
+    elements.push(...this.passthrough);
 
     return elements;
   }
 
-  /** Assign x,y positions to all nodes using row/col grid or auto-layout. */
+  /** Assign x,y positions to all nodes using WASM layout or TS grid fallback. */
   private layoutNodes(): Map<string, PositionedNode> {
+    // Try WASM layout first
+    if (isWasmLoaded()) {
+      const wasmResult = this.layoutNodesWasm();
+      if (wasmResult) return wasmResult;
+    }
+
+    // Fallback: TS grid layout
+    return this.layoutNodesGrid();
+  }
+
+  private layoutNodesWasm(): Map<string, PositionedNode> | null {
+    const nodesJson = JSON.stringify(
+      Array.from(this.nodes.values()).map(n => ({
+        id: n.id, width: n.width, height: n.height,
+        row: n.row ?? null, col: n.col ?? null,
+      })),
+    );
+    const edgesJson = JSON.stringify(
+      this.edges.map(e => ({ from: e.from, to: e.to })),
+    );
+
+    const resultJson = layoutGraph(nodesJson, edgesJson);
+    if (!resultJson) return null;
+
+    try {
+      const positioned = JSON.parse(resultJson) as { id: string; x: number; y: number }[];
+      const result = new Map<string, PositionedNode>();
+
+      for (const pos of positioned) {
+        const node = this.nodes.get(pos.id);
+        if (node) {
+          // Absolute position overrides WASM layout
+          const x = node.absX ?? pos.x;
+          const y = node.absY ?? pos.y;
+          result.set(pos.id, { ...node, x, y });
+        }
+      }
+
+      // Ensure all nodes are positioned (WASM may miss some)
+      for (const node of this.nodes.values()) {
+        if (!result.has(node.id)) {
+          result.set(node.id, { ...node, x: node.absX ?? BASE_X, y: node.absY ?? BASE_Y });
+        }
+      }
+
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
+  private layoutNodesGrid(): Map<string, PositionedNode> {
     const result = new Map<string, PositionedNode>();
 
-    // Assign rows/cols for nodes that don't have them
     let autoRow = 0;
     let autoCol = 0;
     const maxColsPerRow = 5;
 
     for (const node of this.nodes.values()) {
+      // Absolute position takes precedence
+      if (node.absX !== undefined && node.absY !== undefined) {
+        result.set(node.id, { ...node, x: node.absX, y: node.absY });
+        continue;
+      }
+
       const row = node.row ?? autoRow;
       const col = node.col ?? autoCol;
 
       result.set(node.id, {
         ...node,
-        x: BASE_X + col * COL_SPACING,
-        y: BASE_Y + row * ROW_SPACING,
+        x: node.absX ?? (BASE_X + col * COL_SPACING),
+        y: node.absY ?? (BASE_Y + row * ROW_SPACING),
       });
 
       if (node.row === undefined && node.col === undefined) {
@@ -340,6 +802,16 @@ export class Diagram {
 
     return result;
   }
+}
+
+/** Resolve color from opts: hex overrides > preset > default */
+function resolveColor(opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): ColorPair {
+  const preset = opts?.color ?? defaultPreset;
+  const palette = COLOR_PALETTE[preset];
+  return {
+    background: opts?.backgroundColor ?? palette.background,
+    stroke: opts?.strokeColor ?? palette.stroke,
+  };
 }
 
 interface PositionedNode extends GraphNode {

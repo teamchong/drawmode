@@ -20,22 +20,40 @@ export interface ExecuteResult {
  * (i.e., call `d.render()`).
  */
 export async function executeCode(code: string, renderOpts?: RenderOpts): Promise<ExecuteResult> {
-  // Wrap user code in an async function that returns the result
-  const wrappedCode = `
-    return (async () => {
-      ${code}
-    })();
-  `;
+  try {
+    // Merge sourceCode into renderOpts so render() can write sidecar
+    const mergedOpts: RenderOpts = { ...renderOpts, sourceCode: code };
 
-  const fn = new Function("Diagram", wrappedCode);
-  const result = await fn(Diagram);
+    // Wrap user code in an async function that returns the result.
+    // Monkey-patch Diagram.prototype.render to merge renderOpts as defaults
+    // so the caller's format/path preferences are respected even when the
+    // LLM calls d.render() without explicit opts.
+    const wrappedCode = `
+      const _origRender = Diagram.prototype.render;
+      Diagram.prototype.render = function(opts) {
+        return _origRender.call(this, { ...renderOpts, ...opts });
+      };
+      return (async () => {
+        ${code}
+      })();
+    `;
 
-  if (!result || typeof result !== "object") {
+    const fn = new Function("Diagram", "renderOpts", wrappedCode);
+    const result = await fn(Diagram, mergedOpts);
+
+    if (!result || typeof result !== "object") {
+      return {
+        result: { json: {} },
+        error: "Code did not return a RenderResult. Make sure to return d.render().",
+      };
+    }
+
+    return { result };
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
     return {
       result: { json: {} },
-      error: "Code did not return a RenderResult. Make sure to return d.render().",
+      error: message,
     };
   }
-
-  return { result };
 }

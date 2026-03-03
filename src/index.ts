@@ -10,30 +10,106 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { executeCode } from "./executor.js";
 import { loadWasm, isWasmLoaded } from "./layout.js";
 import { Diagram } from "./sdk.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const SDK_TYPES = `
+type FillStyle = "solid" | "hachure" | "cross-hatch";
+type StrokeStyle = "solid" | "dashed" | "dotted";
+type FontFamily = 1 | 2 | 3;  // Virgil / Helvetica / Cascadia
+type Arrowhead = null | "arrow" | "bar" | "dot" | "triangle";
+type TextAlign = "left" | "center" | "right";
+type VerticalAlign = "top" | "middle";
+
+type ColorPreset =
+  | "frontend" | "backend" | "database" | "storage" | "ai" | "external" | "orchestration" | "queue" | "cache" | "users"
+  | "aws-compute" | "aws-storage" | "aws-database" | "aws-network" | "aws-security" | "aws-ml"
+  | "azure-compute" | "azure-data" | "azure-network" | "azure-ai"
+  | "gcp-compute" | "gcp-data" | "gcp-network" | "gcp-ai"
+  | "k8s-pod" | "k8s-service" | "k8s-ingress" | "k8s-volume";
+
+interface ShapeOpts {
+  row?: number; col?: number;
+  color?: ColorPreset;
+  width?: number; height?: number;
+  x?: number; y?: number;               // absolute positioning (bypasses grid)
+  strokeColor?: string;                  // hex override
+  backgroundColor?: string;             // hex override
+  fillStyle?: FillStyle;                 // default "solid"
+  strokeWidth?: number;                  // default 2
+  strokeStyle?: StrokeStyle;             // default "solid"
+  roughness?: number;                    // 0=architect, 1=artist, 2=cartoonist
+  opacity?: number;                      // 0-100
+  roundness?: { type: number } | null;
+  fontSize?: number;                     // default 16
+  fontFamily?: FontFamily;               // default 1
+  textAlign?: TextAlign;
+  verticalAlign?: VerticalAlign;
+}
+
+interface ConnectOpts {
+  style?: StrokeStyle;
+  strokeColor?: string;
+  strokeWidth?: number;
+  roughness?: number;
+  opacity?: number;
+  startArrowhead?: Arrowhead;            // default null
+  endArrowhead?: Arrowhead;              // default "arrow"
+  elbowed?: boolean;                     // default true
+  labelFontSize?: number;
+}
+
 declare class Diagram {
   /** Add a rectangle. Returns element ID. */
-  addBox(label: string, opts?: {
-    row?: number; col?: number;
-    color?: "frontend" | "backend" | "database" | "storage" | "ai" | "external" | "orchestration" | "queue" | "cache" | "users";
-    width?: number; height?: number;
-  }): string;
+  addBox(label: string, opts?: ShapeOpts): string;
 
   /** Add an ellipse. Returns element ID. */
-  addEllipse(label: string, opts?: {
-    row?: number; col?: number;
-    color?: "frontend" | "backend" | "database" | "storage" | "ai" | "external" | "orchestration" | "queue" | "cache" | "users";
+  addEllipse(label: string, opts?: ShapeOpts): string;
+
+  /** Add standalone text (no container). Returns element ID. */
+  addText(text: string, opts?: {
+    x?: number; y?: number;
+    fontSize?: number; fontFamily?: FontFamily;
+    color?: ColorPreset; strokeColor?: string;
+  }): string;
+
+  /** Add a line element. Returns element ID. */
+  addLine(points: [number, number][], opts?: {
+    strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle;
   }): string;
 
   /** Group elements with a dashed boundary. Returns group ID. */
   addGroup(label: string, children: string[]): string;
 
   /** Connect two elements with an arrow. */
-  connect(from: string, to: string, label?: string, opts?: { style?: "solid" | "dashed" }): void;
+  connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
+
+  /** Load existing .excalidraw file for editing. */
+  static fromFile(path: string): Promise<Diagram>;
+
+  /** Find node IDs by label substring match. */
+  findByLabel(label: string): string[];
+
+  /** Get all node IDs. */
+  getNodes(): string[];
+
+  /** Get all edges. */
+  getEdges(): Array<{ from: string; to: string; label?: string }>;
+
+  /** Update a node's properties. */
+  updateNode(id: string, opts: Partial<ShapeOpts> & { label?: string }): void;
+
+  /** Remove a node and its connected edges. */
+  removeNode(id: string): void;
+
+  /** Remove an edge between two nodes. */
+  removeEdge(from: string, to: string): void;
 
   /** Render the diagram. Always return this from your code. */
   render(opts?: {
@@ -48,16 +124,34 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
+// Register widget HTML as a ui:// resource for MCP Apps
+server.resource(
+  "widget",
+  "ui://widget",
+  { description: "Interactive Excalidraw diagram widget", mimeType: "text/html" },
+  async () => {
+    const widgetPath = join(__dirname, "widget.html");
+    let html: string;
+    try {
+      html = await readFile(widgetPath, "utf-8");
+    } catch {
+      // Fallback: try from src/ (dev mode)
+      html = await readFile(join(__dirname, "..", "src", "widget.html"), "utf-8");
+    }
+    return { contents: [{ uri: "ui://widget", mimeType: "text/html", text: html }] };
+  },
+);
+
 server.tool(
   "draw",
-  `Generate an Excalidraw architecture diagram by writing TypeScript code.
+  `Generate or edit an Excalidraw architecture diagram by writing TypeScript code.
 
 You have access to the \`Diagram\` class. Create a new diagram, add shapes, connect them, and return the render result.
 
 TypeScript types available:
 ${SDK_TYPES}
 
-Example:
+Example — new diagram:
 \`\`\`typescript
 const d = new Diagram();
 const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
@@ -69,10 +163,29 @@ d.addGroup("Data Layer", [db, cache]);
 return d.render({ format: "url" });
 \`\`\`
 
-Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omitted.`,
+Example — custom styling:
+\`\`\`typescript
+const d = new Diagram();
+d.addBox("Sketch Style", { fillStyle: "hachure", roughness: 2 });
+d.addBox("Clean Style", { fillStyle: "solid", roughness: 0, opacity: 80 });
+d.connect(a, b, "flow", { startArrowhead: "dot", endArrowhead: "triangle" });
+return d.render();
+\`\`\`
+
+Example — edit existing diagram:
+\`\`\`typescript
+const d = await Diagram.fromFile("diagram.excalidraw");
+const ids = d.findByLabel("Old Service");
+if (ids.length > 0) d.updateNode(ids[0], { label: "New Service", color: "ai" });
+d.removeNode(d.findByLabel("Deprecated")[0]);
+return d.render({ path: "diagram.excalidraw" });
+\`\`\`
+
+Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omitted.
+Use x/y for absolute pixel positioning (bypasses grid).`,
   {
     code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
-    format: z.enum(["excalidraw", "url"]).default("excalidraw").describe("Output format"),
+    format: z.enum(["excalidraw", "url", "png", "svg"]).default("excalidraw").describe("Output format"),
     path: z.string().optional().describe("File path for .excalidraw output"),
   },
   async ({ code, format, path }) => {
@@ -85,7 +198,7 @@ Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omit
       };
     }
 
-    const parts: { type: "text"; text: string }[] = [];
+    const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 
     if (result.url) {
       parts.push({ type: "text" as const, text: `Excalidraw URL: ${result.url}` });
@@ -103,6 +216,36 @@ Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omit
       parts.push({ type: "text" as const, text: JSON.stringify(result.json, null, 2) });
     }
 
+    if (format === "svg" && result.svg) {
+      parts.push({ type: "text" as const, text: result.svg });
+    }
+
+    if (format === "png" && result.png) {
+      const base64 = Buffer.from(result.png).toString("base64");
+      parts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
+    }
+
+    // Return structuredContent for MCP Apps widget support
+    const elements = (result.json as { elements?: unknown[] }).elements;
+    if (elements && Array.isArray(elements) && elements.length > 0) {
+      return {
+        content: parts,
+        structuredContent: {
+          type: "resource" as const,
+          resource: {
+            uri: "ui://widget",
+            mimeType: "text/html",
+          },
+          context: {
+            elements,
+            appState: {
+              viewBackgroundColor: "#ffffff",
+            },
+          },
+        },
+      };
+    }
+
     return { content: parts };
   },
 );
@@ -118,6 +261,8 @@ server.tool(
         text: `drawmode — Code Mode MCP for Excalidraw diagrams
 
 ## Color Presets
+
+### General
 | Preset        | Use for                    |
 |---------------|----------------------------|
 | frontend      | UI, browser, React         |
@@ -130,6 +275,50 @@ server.tool(
 | queue         | Kafka, SQS, RabbitMQ       |
 | cache         | Redis, Memcached           |
 | users         | End users, actors          |
+
+### AWS
+| Preset       | Use for              |
+|--------------|----------------------|
+| aws-compute  | Lambda, EC2, ECS     |
+| aws-storage  | S3, EFS, EBS         |
+| aws-database | RDS, DynamoDB        |
+| aws-network  | VPC, CloudFront, ALB |
+| aws-security | IAM, WAF, Cognito    |
+| aws-ml       | SageMaker, Bedrock   |
+
+### Azure
+| Preset        | Use for              |
+|---------------|----------------------|
+| azure-compute | VMs, Functions, AKS  |
+| azure-data    | SQL, Cosmos, Storage |
+| azure-network | VNet, Front Door     |
+| azure-ai      | OpenAI, Cognitive    |
+
+### GCP
+| Preset      | Use for              |
+|-------------|----------------------|
+| gcp-compute | GCE, Cloud Run, GKE  |
+| gcp-data    | BigQuery, Firestore  |
+| gcp-network | VPC, Cloud CDN       |
+| gcp-ai      | Vertex AI            |
+
+### Kubernetes
+| Preset      | Use for              |
+|-------------|----------------------|
+| k8s-pod     | Pods, Deployments    |
+| k8s-service | Services, Endpoints  |
+| k8s-ingress | Ingress, Gateways    |
+| k8s-volume  | PVs, PVCs, Storage   |
+
+## Editing Existing Diagrams
+
+\`\`\`typescript
+const d = await Diagram.fromFile("diagram.excalidraw");
+const ids = d.findByLabel("API");       // substring search
+d.updateNode(ids[0], { label: "New API", color: "ai" });
+d.removeNode(d.findByLabel("Old")[0]);  // removes node + connected edges
+return d.render({ path: "diagram.excalidraw" });
+\`\`\`
 
 ## SDK Reference
 ${SDK_TYPES}
