@@ -37,8 +37,8 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, out: []u8) !u
     }
 
     // Apply grid positioning
-    const col_spacing: i32 = 240;
-    const row_spacing: i32 = 160;
+    const col_spacing: i32 = 280;
+    const row_spacing: i32 = 220;
     const base_x: i32 = 100;
     const base_y: i32 = 100;
 

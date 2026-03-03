@@ -87,7 +87,7 @@ function renderSvgTs(elements: object[]): string {
         parts.push(`<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="${fontSize}" fill="${escapeAttr(stroke)}">${escapeXml(rawText)}</text>`);
       } else {
         // Multiline: use tspan elements with absolute y positioning
-        const lineHeight = fontSize * 1.2;
+        const lineHeight = fontSize * 1.5;
         const totalHeight = lineHeight * lines.length;
         const startY = cy - totalHeight / 2 + lineHeight / 2;
         const tspans = lines.map((line, i) =>

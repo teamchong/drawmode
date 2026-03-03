@@ -1,6 +1,6 @@
 # drawmode
 
-Code Mode MCP server for generating Excalidraw architecture diagrams. Instead of having LLMs write raw Excalidraw JSON (error-prone), they write TypeScript code against a typed SDK. A Zig WASM module handles auto-layout, arrow routing, and validation.
+Code Mode MCP server for generating Excalidraw architecture diagrams. Instead of having LLMs write raw Excalidraw JSON (error-prone), they write TypeScript code against a typed SDK. Graphviz (via `@hpcc-js/wasm-graphviz`) handles graph layout with proper crossing minimization and orthogonal edge routing. A Zig WASM module handles SVG rendering and validation.
 
 ## Quick Start
 
@@ -30,8 +30,9 @@ npx drawmode
 1. LLM receives one tool (`draw`) with TypeScript type definitions (~100 lines)
 2. LLM writes code against the `Diagram` SDK
 3. Local executor runs it — SDK handles labels, colors, IDs
-4. Zig WASM handles layout positioning, arrow routing, validation
-5. Output: `.excalidraw` file + excalidraw.com URL + optional PNG/SVG
+4. Graphviz `dot` engine handles layout positioning and edge routing (with orthogonal splines)
+5. Zig WASM handles SVG rendering and validation
+6. Output: `.excalidraw` file + excalidraw.com URL + optional PNG/SVG
 
 ```typescript
 const d = new Diagram();
@@ -159,7 +160,7 @@ drawmode/
 │   ├── index.ts             # MCP server entry point (stdio + HTTP)
 │   ├── sdk.ts               # Diagram SDK (addBox, connect, render, etc.)
 │   ├── executor.ts          # Local executor
-│   ├── layout.ts            # WASM layout bridge
+│   ├── layout.ts            # Layout bridge (Graphviz primary, Zig WASM fallback)
 │   ├── upload.ts            # Excalidraw.com upload
 │   ├── export.ts            # PNG/SVG export
 │   ├── types.ts             # Shared types
@@ -167,8 +168,8 @@ drawmode/
 ├── wasm/                    # Zig WASM module
 │   └── src/
 │       ├── main.zig         # WASM exports
-│       ├── layout.zig       # Auto-layout engine
-│       ├── arrows.zig       # Arrow routing
+│       ├── layout.zig       # Grid layout fallback
+│       ├── arrows.zig       # Arrow routing fallback
 │       ├── svg.zig          # SVG generation
 │       └── validate.zig     # Structural validation
 └── worker/                  # Cloudflare Worker (remote MCP)
@@ -176,9 +177,20 @@ drawmode/
     └── wrangler.toml
 ```
 
-The Zig WASM module handles what LLMs can't do reliably:
-- **Auto-layout** — layered graph layout (dagre-style), nodes placed by row with minimal edge crossings
-- **Arrow routing** — edge point calculation, elbow routing with 90-degree corners, staggering multiple arrows from same edge
+### Layout Engine
+
+**Graphviz** (via `@hpcc-js/wasm-graphviz`) is the primary layout engine — the real Graphviz C library compiled to WASM:
+
+- **Sugiyama algorithm** — proper layered graph layout with crossing minimization
+- **Orthogonal edge routing** (`splines=ortho`) — 90-degree elbows matching Excalidraw style
+- **Cluster subgraphs** — groups rendered as Graphviz clusters
+- **Rank constraints** — nodes with same `row` value share a rank
+
+Falls back to Zig WASM grid → TS grid if Graphviz is unavailable.
+
+### Zig WASM Module
+
+- **SVG rendering** — generates SVG from Excalidraw elements
 - **Validation** — bound text elements, no duplicate IDs, arrow endpoints on shape edges, no overlapping elements
 
 ## Development

@@ -101,7 +101,7 @@ pub fn renderSvg(elements_json: []const u8, out: []u8) !usize {
 
             // Count lines by looking for \n (literal backslash-n in JSON)
             const line_count = countJsonNewlines(e.text_content) + 1;
-            const line_height = @divTrunc(e.font_size * 6, 5); // fontSize * 1.2
+            const line_height = @divTrunc(e.font_size * 3, 2); // fontSize * 1.5
 
             if (line_count == 1) {
                 written += copySlice(out[written..], "<text x=\"");

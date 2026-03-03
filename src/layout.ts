@@ -1,9 +1,8 @@
 /**
- * WASM layout bridge — calls Zig auto-layout engine.
+ * Layout bridge — Graphviz (via @hpcc-js/wasm-graphviz) for graph layout,
+ * Zig WASM for SVG rendering and validation.
  *
- * When WASM is available, uses it for precise layout, arrow routing,
- * and validation. Falls back to the built-in TS grid layout in sdk.ts
- * when WASM is not loaded (e.g., first run before building Zig).
+ * Layout priority: Graphviz → Zig WASM grid → TS grid (in sdk.ts)
  */
 
 import { readFile } from "node:fs/promises";
@@ -11,6 +10,214 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── Graphviz layout via @hpcc-js/wasm-graphviz ──
+
+export interface GraphvizEdgeRoute {
+  /** Absolute Excalidraw-coordinate points for the arrow path */
+  points: [number, number][];
+  /** Label position in Excalidraw coordinates */
+  labelPos?: { x: number; y: number };
+}
+
+export interface GraphvizLayoutResult {
+  nodes: { id: string; x: number; y: number }[];
+  edgeRoutes: Map<string, GraphvizEdgeRoute>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let graphvizInstance: any = null;
+let graphvizLoadAttempted = false;
+
+async function getGraphviz() {
+  if (graphvizInstance) return graphvizInstance;
+  if (graphvizLoadAttempted) return null;
+  graphvizLoadAttempted = true;
+  try {
+    const mod = await import("@hpcc-js/wasm-graphviz");
+    graphvizInstance = await mod.Graphviz.load();
+    return graphvizInstance;
+  } catch {
+    return null;
+  }
+}
+
+export async function layoutGraphGraphviz(
+  nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number }[],
+  edges: { from: string; to: string; label?: string }[],
+  groups?: { id: string; label: string; children: string[] }[],
+): Promise<GraphvizLayoutResult | null> {
+  const gv = await getGraphviz();
+  if (!gv) return null;
+
+  const dotString = generateDot(nodes, edges, groups);
+
+  try {
+    const resultStr = gv.dot(dotString, "json");
+    return parseJson0Result(JSON.parse(resultStr), nodes);
+  } catch {
+    // ortho splines can fail on some graph topologies — try polyline
+    try {
+      const fallbackDot = dotString.replace("splines=ortho", "splines=polyline");
+      const resultStr = gv.dot(fallbackDot, "json");
+      return parseJson0Result(JSON.parse(resultStr), nodes);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function generateDot(
+  nodes: { id: string; width: number; height: number; row?: number; col?: number }[],
+  edges: { from: string; to: string; label?: string }[],
+  groups?: { id: string; label: string; children: string[] }[],
+): string {
+  const lines: string[] = [];
+  lines.push("digraph G {");
+  lines.push("  rankdir=TB;");
+  lines.push("  ranksep=1.5;");
+  lines.push("  nodesep=1.0;");
+  lines.push("  splines=ortho;");
+  lines.push("  node [shape=box];");
+
+  // Cluster subgraphs for groups
+  const groupedNodeIds = new Set<string>();
+  if (groups) {
+    for (const group of groups) {
+      const clusterId = group.id.replace(/[^a-zA-Z0-9_]/g, "_");
+      lines.push(`  subgraph cluster_${clusterId} {`);
+      lines.push(`    label="${escapeDot(group.label)}";`);
+      lines.push("    style=dashed;");
+      lines.push('    color="#868e96";');
+      for (const childId of group.children) {
+        const node = nodes.find(n => n.id === childId);
+        if (node) {
+          lines.push(`    "${escapeDot(node.id)}" [width=${(node.width / 72).toFixed(4)} height=${(node.height / 72).toFixed(4)}];`);
+          groupedNodeIds.add(node.id);
+        }
+      }
+      lines.push("  }");
+    }
+  }
+
+  // Non-grouped nodes
+  for (const node of nodes) {
+    if (groupedNodeIds.has(node.id)) continue;
+    lines.push(`  "${escapeDot(node.id)}" [width=${(node.width / 72).toFixed(4)} height=${(node.height / 72).toFixed(4)}];`);
+  }
+
+  // Rank constraints: nodes with same row value share a rank
+  const rowGroups = new Map<number, string[]>();
+  for (const node of nodes) {
+    if (node.row !== undefined) {
+      if (!rowGroups.has(node.row)) rowGroups.set(node.row, []);
+      rowGroups.get(node.row)!.push(node.id);
+    }
+  }
+  for (const [, nodeIds] of rowGroups) {
+    if (nodeIds.length >= 2) {
+      lines.push(`  { rank=same; ${nodeIds.map(id => `"${escapeDot(id)}"`).join("; ")}; }`);
+    }
+  }
+
+  // Edges
+  for (const edge of edges) {
+    const labelAttr = edge.label ? ` [label="${escapeDot(edge.label)}"]` : "";
+    lines.push(`  "${escapeDot(edge.from)}" -> "${escapeDot(edge.to)}"${labelAttr};`);
+  }
+
+  lines.push("}");
+  return lines.join("\n");
+}
+
+function parseJson0Result(
+  json0: Record<string, unknown>,
+  inputNodes: { id: string; width: number; height: number }[],
+): GraphvizLayoutResult {
+  // Bounding box: "x1,y1,x2,y2" in points (Y-up)
+  const bb = (json0.bb as string).split(",").map(Number);
+  const maxY = bb[3];
+
+  // Map _gvid → node ID (only for actual nodes, not subgraphs)
+  const gvidToId = new Map<number, string>();
+  const inputNodeMap = new Map(inputNodes.map(n => [n.id, n]));
+  const resultNodes: { id: string; x: number; y: number }[] = [];
+
+  for (const obj of (json0.objects as Record<string, unknown>[]) ?? []) {
+    const pos = obj.pos as string | undefined;
+    if (!pos) continue; // subgraphs have bb, not pos
+
+    const name = obj.name as string;
+    const input = inputNodeMap.get(name);
+    if (!input) continue;
+
+    gvidToId.set(obj._gvid as number, name);
+
+    const [gvX, gvY] = pos.split(",").map(Number);
+    // Graphviz Y-up → Excalidraw Y-down, center → top-left corner
+    const exX = gvX - input.width / 2;
+    const exY = (maxY - gvY) - input.height / 2;
+    resultNodes.push({ id: name, x: Math.round(exX), y: Math.round(exY) });
+  }
+
+  // Parse edge routing
+  const edgeRoutes = new Map<string, GraphvizEdgeRoute>();
+  for (const edge of (json0.edges as Record<string, unknown>[]) ?? []) {
+    const fromId = gvidToId.get(edge.tail as number);
+    const toId = gvidToId.get(edge.head as number);
+    if (!fromId || !toId) continue;
+
+    const key = `${fromId}->${toId}`;
+
+    // Extract path points from _draw_ B-spline operations
+    const drawOps = edge._draw_ as { op: string; points?: [number, number][] }[] | undefined;
+    if (!drawOps) continue;
+
+    const pathPoints: [number, number][] = [];
+    for (const op of drawOps) {
+      if ((op.op === "b" || op.op === "B") && op.points) {
+        // B-spline: extract waypoints (every 3rd point = actual path points)
+        const pts = op.points;
+        for (let i = 0; i < pts.length; i += 3) {
+          pathPoints.push([Math.round(pts[i][0]), Math.round(maxY - pts[i][1])]);
+        }
+        // Ensure last point is included
+        const last = pts[pts.length - 1];
+        const lastConverted: [number, number] = [Math.round(last[0]), Math.round(maxY - last[1])];
+        const prev = pathPoints[pathPoints.length - 1];
+        if (!prev || prev[0] !== lastConverted[0] || prev[1] !== lastConverted[1]) {
+          pathPoints.push(lastConverted);
+        }
+      }
+    }
+
+    // Deduplicate consecutive identical points
+    const deduped: [number, number][] = [];
+    for (const pt of pathPoints) {
+      const prev = deduped[deduped.length - 1];
+      if (!prev || prev[0] !== pt[0] || prev[1] !== pt[1]) {
+        deduped.push(pt);
+      }
+    }
+
+    // Parse label position from "lp" attribute
+    let labelPos: { x: number; y: number } | undefined;
+    if (edge.lp) {
+      const [lpX, lpY] = (edge.lp as string).split(",").map(Number);
+      labelPos = { x: Math.round(lpX), y: Math.round(maxY - lpY) };
+    }
+
+    if (deduped.length >= 2) {
+      edgeRoutes.set(key, { points: deduped, labelPos });
+    }
+  }
+
+  return { nodes: resultNodes, edgeRoutes };
+}
+
+function escapeDot(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
 
 interface WasmLayoutExports {
   memory: WebAssembly.Memory;

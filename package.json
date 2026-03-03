@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@cloudflare/codemode": "^0.1.0",
+    "@hpcc-js/wasm-graphviz": "^1.21.0",
     "@modelcontextprotocol/ext-apps": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.25.0",
     "@resvg/resvg-js": "^2.6.0",

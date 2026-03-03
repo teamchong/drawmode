@@ -9,12 +9,17 @@ import type {
   Arrowhead, TextAlign, VerticalAlign, ColorPair,
 } from "./types.js";
 import { COLOR_PALETTE } from "./types.js";
-import { layoutGraph, validateElements, isWasmLoaded } from "./layout.js";
+import {
+  layoutGraph, validateElements, isWasmLoaded,
+  layoutGraphGraphviz,
+  type GraphvizEdgeRoute, type GraphvizLayoutResult,
+} from "./layout.js";
 
 const DEFAULT_WIDTH = 180;
 const DEFAULT_HEIGHT = 80;
-const COL_SPACING = 240;
-const ROW_SPACING = 160;
+const LINE_HEIGHT = 24; // extra height per additional line of text
+const COL_SPACING = 280;
+const ROW_SPACING = 220;
 const BASE_X = 100;
 const BASE_Y = 100;
 
@@ -38,11 +43,12 @@ export class Diagram {
   addBox(label: string, opts?: ShapeOpts): string {
     const id = nextId("box");
     const color = resolveColor(opts);
+    const extraLines = (label.split("\n").length - 1);
     this.nodes.set(id, {
       id, label, type: "rectangle",
       row: opts?.row, col: opts?.col,
       width: opts?.width ?? DEFAULT_WIDTH,
-      height: opts?.height ?? DEFAULT_HEIGHT,
+      height: opts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT),
       color,
       opts,
       absX: opts?.x,
@@ -56,11 +62,12 @@ export class Diagram {
     const id = nextId("ell");
     const defaultPreset: ColorPreset = "users";
     const color = resolveColor(opts, defaultPreset);
+    const extraLines = (label.split("\n").length - 1);
     this.nodes.set(id, {
       id, label, type: "ellipse",
       row: opts?.row, col: opts?.col,
       width: opts?.width ?? DEFAULT_WIDTH,
-      height: opts?.height ?? DEFAULT_HEIGHT,
+      height: opts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT),
       color,
       opts,
       absX: opts?.x,
@@ -325,7 +332,7 @@ export class Diagram {
 
   /** Render the diagram to the specified format. */
   async render(opts?: RenderOpts): Promise<RenderResult> {
-    const elements = this.buildElements();
+    const elements = await this.buildElements();
 
     // WASM validation: log warnings to stderr if available
     if (isWasmLoaded()) {
@@ -394,9 +401,9 @@ export class Diagram {
   }
 
   /** Convert the graph to Excalidraw elements with layout. */
-  private buildElements(): object[] {
+  private async buildElements(): Promise<object[]> {
     const elements: object[] = [];
-    const positioned = this.layoutNodes();
+    const { positioned, edgeRoutes } = await this.layoutNodes();
 
     // Create shape + bound text for each node
     for (const node of positioned.values()) {
@@ -547,34 +554,65 @@ export class Diagram {
 
       const isElbowed = co?.elbowed !== false; // default true
 
-      // Determine source/target edges and calculate staggered positions
-      const { sourcePoint, targetPoint, sourceEdge, targetEdge } =
-        calculateArrowEndpoints(fromNode, toNode, outIdx, outCount);
+      // Check for Graphviz-computed edge route
+      const routeKey = `${edge.from}->${edge.to}`;
+      const gvRoute = edgeRoutes?.get(routeKey);
 
-      const dx = targetPoint.x - sourcePoint.x;
-      const dy = targetPoint.y - sourcePoint.y;
-
-      // Elbow routing
+      let arrowX: number, arrowY: number;
       let points: number[][];
-      if (isElbowed) {
-        if (sourceEdge === "bottom" && targetEdge === "top") {
-          if (Math.abs(dx) < 10) {
-            points = [[0, 0], [0, dy]];
+
+      if (gvRoute && gvRoute.points.length >= 2) {
+        // Use Graphviz-computed route
+        arrowX = gvRoute.points[0][0];
+        arrowY = gvRoute.points[0][1];
+        points = gvRoute.points.map(([px, py]) => [px - arrowX, py - arrowY]);
+      } else {
+        // Fallback: TS elbow routing
+        const { sourcePoint, targetPoint, sourceEdge, targetEdge } =
+          calculateArrowEndpoints(fromNode, toNode, outIdx, outCount);
+
+        arrowX = sourcePoint.x;
+        arrowY = sourcePoint.y;
+
+        const dx = targetPoint.x - sourcePoint.x;
+        const dy = targetPoint.y - sourcePoint.y;
+
+        if (isElbowed) {
+          if (sourceEdge === "bottom" && targetEdge === "top") {
+            if (Math.abs(dx) < 10) {
+              points = [[0, 0], [0, dy]];
+            } else {
+              const midY = Math.round(dy / 2);
+              points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
+            }
+          } else if (sourceEdge === "top" && targetEdge === "bottom") {
+            if (Math.abs(dx) < 10) {
+              points = [[0, 0], [0, dy]];
+            } else {
+              const midY = Math.round(dy / 2);
+              points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
+            }
+          } else if (sourceEdge === "right" && targetEdge === "left") {
+            if (Math.abs(dy) < 10) {
+              points = [[0, 0], [dx, 0]];
+            } else {
+              const midX = Math.round(dx / 2);
+              points = [[0, 0], [midX, 0], [midX, dy], [dx, dy]];
+            }
+          } else if (sourceEdge === "left" && targetEdge === "right") {
+            if (Math.abs(dy) < 10) {
+              points = [[0, 0], [dx, 0]];
+            } else {
+              const midX = Math.round(dx / 2);
+              points = [[0, 0], [midX, 0], [midX, dy], [dx, dy]];
+            }
           } else {
-            points = [[0, 0], [dx, 0], [dx, dy]];
-          }
-        } else if (sourceEdge === "right" && targetEdge === "left") {
-          if (Math.abs(dy) < 10) {
-            points = [[0, 0], [dx, 0]];
-          } else {
-            points = [[0, 0], [0, dy], [dx, dy]];
+            const midY = Math.round(dy / 2);
+            points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
           }
         } else {
           points = [[0, 0], [dx, dy]];
         }
-      } else {
-        // Straight arrow
-        points = [[0, 0], [dx, dy]];
       }
 
       const allX = points.map(p => p[0]);
@@ -587,8 +625,8 @@ export class Diagram {
       elements.push({
         id: arrowId,
         type: "arrow",
-        x: sourcePoint.x,
-        y: sourcePoint.y,
+        x: arrowX,
+        y: arrowY,
         width: boundsWidth || 1,
         height: boundsHeight || 1,
         points,
@@ -615,15 +653,36 @@ export class Diagram {
         versionNonce: randSeed(),
       });
 
-      // Arrow label: bound text element at midpoint of arrow path
+      // Arrow label placement
       if (edge.label && labelTextId) {
-        const midIdx = Math.floor(points.length / 2);
-        const midPt = points[midIdx];
+        let labelX: number, labelY: number;
+
+        if (gvRoute?.labelPos) {
+          // Use Graphviz-computed label position
+          labelX = gvRoute.labelPos.x;
+          labelY = gvRoute.labelPos.y - 12;
+        } else if (points.length >= 2) {
+          // Fallback: midpoint of longest segment
+          let bestLen = 0, bestSeg = 0;
+          for (let s = 0; s < points.length - 1; s++) {
+            const segDx = points[s + 1][0] - points[s][0];
+            const segDy = points[s + 1][1] - points[s][1];
+            const segLen = Math.abs(segDx) + Math.abs(segDy);
+            if (segLen > bestLen) { bestLen = segLen; bestSeg = s; }
+          }
+          const p1 = points[bestSeg], p2 = points[bestSeg + 1];
+          labelX = arrowX + (p1[0] + p2[0]) / 2;
+          labelY = arrowY + (p1[1] + p2[1]) / 2 - 12;
+        } else {
+          labelX = arrowX;
+          labelY = arrowY - 12;
+        }
+
         elements.push({
           id: labelTextId,
           type: "text",
-          x: sourcePoint.x + midPt[0],
-          y: sourcePoint.y + midPt[1] - 10,
+          x: labelX,
+          y: labelY,
           width: edge.label.length * 8 + 16,
           height: 20,
           text: edge.label,
@@ -724,16 +783,63 @@ export class Diagram {
     return elements;
   }
 
-  /** Assign x,y positions to all nodes using WASM layout or TS grid fallback. */
-  private layoutNodes(): Map<string, PositionedNode> {
-    // Try WASM layout first
+  /** Assign x,y positions to all nodes. Priority: Graphviz → WASM grid → TS grid. */
+  private async layoutNodes(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, GraphvizEdgeRoute> }> {
+    // Try Graphviz layout first (async)
+    const gvResult = await this.layoutNodesGraphviz();
+    if (gvResult) return gvResult;
+
+    // Try WASM grid layout
     if (isWasmLoaded()) {
       const wasmResult = this.layoutNodesWasm();
-      if (wasmResult) return wasmResult;
+      if (wasmResult) return { positioned: wasmResult };
     }
 
     // Fallback: TS grid layout
-    return this.layoutNodesGrid();
+    return { positioned: this.layoutNodesGrid() };
+  }
+
+  private async layoutNodesGraphviz(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, GraphvizEdgeRoute> } | null> {
+    // Only layout graph-relevant nodes (rectangles, ellipses) via Graphviz
+    const graphNodes = Array.from(this.nodes.values()).filter(
+      n => n.type === "rectangle" || n.type === "ellipse",
+    );
+    if (graphNodes.length === 0) return null;
+
+    const gvNodes = graphNodes.map(n => ({
+      id: n.id, width: n.width, height: n.height,
+      row: n.row, col: n.col, absX: n.absX, absY: n.absY,
+    }));
+    const gvEdges = this.edges.map(e => ({
+      from: e.from, to: e.to, label: e.label,
+    }));
+    const gvGroups = Array.from(this.groups.entries()).map(([id, g]) => ({
+      id, label: g.label, children: g.children,
+    }));
+
+    const result = await layoutGraphGraphviz(gvNodes, gvEdges, gvGroups.length > 0 ? gvGroups : undefined);
+    if (!result) return null;
+
+    const positioned = new Map<string, PositionedNode>();
+
+    // Apply Graphviz positions (absX/absY overrides)
+    for (const pos of result.nodes) {
+      const node = this.nodes.get(pos.id);
+      if (node) {
+        const x = node.absX ?? pos.x;
+        const y = node.absY ?? pos.y;
+        positioned.set(pos.id, { ...node, x, y });
+      }
+    }
+
+    // Position non-graph nodes (text, lines) using absX/absY
+    for (const node of this.nodes.values()) {
+      if (!positioned.has(node.id)) {
+        positioned.set(node.id, { ...node, x: node.absX ?? BASE_X, y: node.absY ?? BASE_Y });
+      }
+    }
+
+    return { positioned, edgeRoutes: result.edgeRoutes };
   }
 
   private layoutNodesWasm(): Map<string, PositionedNode> | null {
@@ -751,20 +857,18 @@ export class Diagram {
     if (!resultJson) return null;
 
     try {
-      const positioned = JSON.parse(resultJson) as { id: string; x: number; y: number }[];
+      const laid = JSON.parse(resultJson) as { id: string; x: number; y: number }[];
       const result = new Map<string, PositionedNode>();
 
-      for (const pos of positioned) {
+      for (const pos of laid) {
         const node = this.nodes.get(pos.id);
         if (node) {
-          // Absolute position overrides WASM layout
           const x = node.absX ?? pos.x;
           const y = node.absY ?? pos.y;
           result.set(pos.id, { ...node, x, y });
         }
       }
 
-      // Ensure all nodes are positioned (WASM may miss some)
       for (const node of this.nodes.values()) {
         if (!result.has(node.id)) {
           result.set(node.id, { ...node, x: node.absX ?? BASE_X, y: node.absY ?? BASE_Y });
@@ -845,10 +949,21 @@ function calculateArrowEndpoints(
   const dy = (ty + to.height / 2) - (fy + from.height / 2);
   const dx = (tx + to.width / 2) - (fx + from.width / 2);
 
+  // Check if boxes don't overlap vertically (clear row gap) — prefer vertical routing
+  const fromBottom = fy + from.height;
+  const toBottom = ty + to.height;
+  const hasVerticalGap = (fromBottom < ty) || (toBottom < fy);
+  // Check if boxes don't overlap horizontally (clear col gap) — prefer horizontal routing
+  const fromRight = fx + from.width;
+  const toRight = tx + to.width;
+  const hasHorizontalGap = (fromRight < tx) || (toRight < fx);
+
   let sourceEdge: string, targetEdge: string;
   let sourcePoint: Point, targetPoint: Point;
 
-  if (Math.abs(dy) > Math.abs(dx)) {
+  // Prefer vertical routing when there's a clear row gap (avoids crossing boxes in same row)
+  const preferVertical = hasVerticalGap && !(hasHorizontalGap && !hasVerticalGap);
+  if (preferVertical ? (Math.abs(dy) > 0) : (Math.abs(dy) > Math.abs(dx))) {
     // Vertical relationship
     if (dy > 0) {
       sourceEdge = "bottom"; targetEdge = "top";
