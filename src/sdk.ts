@@ -24,8 +24,9 @@ const BASE_X = 100;
 const BASE_Y = 100;
 
 let idCounter = 0;
+const SESSION_SEED = Date.now().toString(36);
 function nextId(prefix: string): string {
-  return `${prefix}_${++idCounter}_${Date.now().toString(36)}`;
+  return `${prefix}_${++idCounter}_${SESSION_SEED}`;
 }
 
 function randSeed(): number {
@@ -133,17 +134,6 @@ export class Diagram {
   /** Load an existing .excalidraw file for editing. */
   static async fromFile(path: string): Promise<Diagram> {
     const { readFile } = await import("node:fs/promises");
-
-    // Check for sidecar .drawmode.ts first
-    const sidecarPath = path.replace(/\.excalidraw$/, ".drawmode.ts");
-    try {
-      const { stat } = await import("node:fs/promises");
-      await stat(sidecarPath);
-      // Sidecar exists — but we still parse JSON so caller can edit
-    } catch {
-      // No sidecar, fine
-    }
-
     const raw = await readFile(path, "utf-8");
     const json = JSON.parse(raw);
     const elements: Record<string, unknown>[] = json.elements ?? [];
@@ -522,12 +512,16 @@ export class Diagram {
       });
     }
 
-    // Create arrows for edges
-    const edgeCounts = new Map<string, number>();
+    // Create arrows for edges — only compute stagger counts if needed for TS fallback routing
+    let edgeCounts: Map<string, number> | undefined;
     const edgeIndexes = new Map<string, number>();
 
-    for (const edge of this.edges) {
-      edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
+    const needsStagger = !edgeRoutes || this.edges.some(e => !edgeRoutes.has(`${e.from}->${e.to}`));
+    if (needsStagger) {
+      edgeCounts = new Map();
+      for (const edge of this.edges) {
+        edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
+      }
     }
 
     for (const edge of this.edges) {
@@ -544,7 +538,7 @@ export class Diagram {
       const gvRoute = edgeRoutes?.get(routeKey);
 
       // Only track stagger indexes for TS-routed edges
-      const outCount = edgeCounts.get(edge.from) ?? 1;
+      const outCount = edgeCounts?.get(edge.from) ?? 1;
       const outIdx = gvRoute ? 0 : (edgeIndexes.get(edge.from) ?? 0);
       if (!gvRoute) edgeIndexes.set(edge.from, outIdx + 1);
 
@@ -588,10 +582,15 @@ export class Diagram {
         }
       }
 
-      const allX = points.map(p => p[0]);
-      const allY = points.map(p => p[1]);
-      const boundsWidth = Math.max(...allX) - Math.min(...allX);
-      const boundsHeight = Math.max(...allY) - Math.min(...allY);
+      let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
+      for (const p of points) {
+        if (p[0] < bMinX) bMinX = p[0];
+        if (p[0] > bMaxX) bMaxX = p[0];
+        if (p[1] < bMinY) bMinY = p[1];
+        if (p[1] > bMaxY) bMaxY = p[1];
+      }
+      const boundsWidth = bMaxX - bMinX;
+      const boundsHeight = bMaxY - bMinY;
 
       const labelTextId = edge.label ? nextId("arrlbl") : undefined;
 
@@ -912,9 +911,7 @@ function calculateArrowEndpoints(
   let sourceEdge: string, targetEdge: string;
   let sourcePoint: Point, targetPoint: Point;
 
-  // Prefer vertical routing when there's a clear row gap (avoids crossing boxes in same row)
-  const preferVertical = hasVerticalGap && !(hasHorizontalGap && !hasVerticalGap);
-  if (preferVertical ? (Math.abs(dy) > 0) : (Math.abs(dy) > Math.abs(dx))) {
+  if (hasVerticalGap ? (Math.abs(dy) > 0) : (Math.abs(dy) > Math.abs(dx))) {
     // Vertical relationship
     if (dy > 0) {
       sourceEdge = "bottom"; targetEdge = "top";

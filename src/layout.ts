@@ -76,11 +76,10 @@ function generateDot(
   lines.push("  splines=ortho;");
   lines.push("  node [shape=box];");
 
-  const nodeById = new Map(nodes.map(n => [n.id, n]));
-
   // Cluster subgraphs for groups
   const groupedNodeIds = new Set<string>();
   if (groups) {
+    const nodeById = new Map(nodes.map(n => [n.id, n]));
     for (const group of groups) {
       const clusterId = group.id.replace(/[^a-zA-Z0-9_]/g, "_");
       lines.push(`  subgraph cluster_${clusterId} {`);
@@ -247,98 +246,54 @@ function readFromWasm(ptr: number, len: number): Uint8Array {
   return new Uint8Array(wasmInstance.memory.buffer, ptr, len).slice();
 }
 
-/**
- * Run WASM auto-layout on nodes and edges.
- * Returns positioned node JSON, or null if WASM unavailable.
- */
+/** Call a single-input WASM function: encode JSON → call → decode result. */
+function callWasm(
+  fn: (inPtr: number, inLen: number, outPtr: number, outCap: number) => number,
+  inputJson: string,
+  outCap: number,
+): string | null {
+  if (!wasmInstance) return null;
+  const inBytes = new TextEncoder().encode(inputJson);
+  const inPtr = writeToWasm(inBytes);
+  const outPtr = wasmInstance.alloc(outCap);
+  const written = fn(inPtr, inBytes.byteLength, outPtr, outCap);
+  const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
+  wasmInstance.dealloc(inPtr, inBytes.byteLength);
+  wasmInstance.dealloc(outPtr, outCap);
+  return result;
+}
+
+/** Run WASM auto-layout on nodes and edges. */
 export function layoutGraph(nodesJson: string, edgesJson: string): string | null {
   if (!wasmInstance) return null;
-
   const nodesBytes = new TextEncoder().encode(nodesJson);
   const edgesBytes = new TextEncoder().encode(edgesJson);
-  const outCap = 64 * 1024; // 64KB output buffer
-
+  const outCap = 64 * 1024;
   const nodesPtr = writeToWasm(nodesBytes);
   const edgesPtr = writeToWasm(edgesBytes);
   const outPtr = wasmInstance.alloc(outCap);
-
-  const written = wasmInstance.layoutGraph(
-    nodesPtr, nodesBytes.byteLength,
-    edgesPtr, edgesBytes.byteLength,
-    outPtr, outCap,
-  );
-
+  const written = wasmInstance.layoutGraph(nodesPtr, nodesBytes.byteLength, edgesPtr, edgesBytes.byteLength, outPtr, outCap);
   const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
-
   wasmInstance.dealloc(nodesPtr, nodesBytes.byteLength);
   wasmInstance.dealloc(edgesPtr, edgesBytes.byteLength);
   wasmInstance.dealloc(outPtr, outCap);
-
   return result;
 }
 
-/**
- * Run WASM arrow routing on elements.
- * Returns elements with corrected arrow positions, or null if WASM unavailable.
- */
+/** Run WASM arrow routing on elements. */
 export function routeArrows(elementsJson: string): string | null {
   if (!wasmInstance) return null;
-
-  const elemBytes = new TextEncoder().encode(elementsJson);
-  const outCap = 128 * 1024;
-
-  const elemPtr = writeToWasm(elemBytes);
-  const outPtr = wasmInstance.alloc(outCap);
-
-  const written = wasmInstance.routeArrows(elemPtr, elemBytes.byteLength, outPtr, outCap);
-  const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
-
-  wasmInstance.dealloc(elemPtr, elemBytes.byteLength);
-  wasmInstance.dealloc(outPtr, outCap);
-
-  return result;
+  return callWasm(wasmInstance.routeArrows.bind(wasmInstance), elementsJson, 128 * 1024);
 }
 
-/**
- * Validate Excalidraw elements.
- * Returns validation errors JSON, or null (no errors / WASM unavailable).
- */
+/** Validate Excalidraw elements. Returns validation errors JSON, or null. */
 export function validateElements(elementsJson: string): string | null {
   if (!wasmInstance) return null;
-
-  const elemBytes = new TextEncoder().encode(elementsJson);
-  const outCap = 16 * 1024;
-
-  const elemPtr = writeToWasm(elemBytes);
-  const outPtr = wasmInstance.alloc(outCap);
-
-  const written = wasmInstance.validate(elemPtr, elemBytes.byteLength, outPtr, outCap);
-  const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
-
-  wasmInstance.dealloc(elemPtr, elemBytes.byteLength);
-  wasmInstance.dealloc(outPtr, outCap);
-
-  return result;
+  return callWasm(wasmInstance.validate.bind(wasmInstance), elementsJson, 16 * 1024);
 }
 
-/**
- * Render Excalidraw elements to SVG using WASM.
- * Returns SVG string, or null if WASM unavailable.
- */
+/** Render Excalidraw elements to SVG using WASM. */
 export function renderSvg(elementsJson: string): string | null {
   if (!wasmInstance) return null;
-
-  const elemBytes = new TextEncoder().encode(elementsJson);
-  const outCap = 256 * 1024; // 256KB for SVG output
-
-  const elemPtr = writeToWasm(elemBytes);
-  const outPtr = wasmInstance.alloc(outCap);
-
-  const written = wasmInstance.renderSvg(elemPtr, elemBytes.byteLength, outPtr, outCap);
-  const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
-
-  wasmInstance.dealloc(elemPtr, elemBytes.byteLength);
-  wasmInstance.dealloc(outPtr, outCap);
-
-  return result;
+  return callWasm(wasmInstance.renderSvg.bind(wasmInstance), elementsJson, 256 * 1024);
 }

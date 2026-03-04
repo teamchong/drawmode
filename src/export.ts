@@ -70,10 +70,10 @@ function renderSvgTs(elements: object[]): string {
 
     if (type === "rectangle") {
       const dashAttr = isDashed ? ` stroke-dasharray="5,5" opacity="0.4"` : "";
-      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${isDashed ? "none" : escapeAttr(fill)}" stroke="${isDashed ? "#868e96" : escapeAttr(stroke)}" stroke-width="2" rx="8"${dashAttr}/>`);
+      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${isDashed ? "none" : escapeXml(fill)}" stroke="${isDashed ? "#868e96" : escapeXml(stroke)}" stroke-width="2" rx="8"${dashAttr}/>`);
     } else if (type === "ellipse") {
       const cx = x + w / 2, cy = y + h / 2;
-      parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${w / 2}" ry="${h / 2}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="2"/>`);
+      parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${w / 2}" ry="${h / 2}" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="2"/>`);
     } else if (type === "text") {
       const rawText = String(el.text ?? "");
       const fontSize = (el.fontSize as number) ?? 16;
@@ -84,7 +84,7 @@ function renderSvgTs(elements: object[]): string {
       // Split on actual newlines
       const lines = rawText.split("\n");
       if (lines.length === 1) {
-        parts.push(`<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="${fontSize}" fill="${escapeAttr(stroke)}">${escapeXml(rawText)}</text>`);
+        parts.push(`<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="${fontSize}" fill="${escapeXml(stroke)}">${escapeXml(rawText)}</text>`);
       } else {
         // Multiline: use tspan elements with absolute y positioning
         const lineHeight = fontSize * 1.5;
@@ -93,7 +93,7 @@ function renderSvgTs(elements: object[]): string {
         const tspans = lines.map((line, i) =>
           `<tspan x="${cx}" y="${startY + i * lineHeight}">${escapeXml(line)}</tspan>`,
         ).join("");
-        parts.push(`<text text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="${fontSize}" fill="${escapeAttr(stroke)}">${tspans}</text>`);
+        parts.push(`<text text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="${fontSize}" fill="${escapeXml(stroke)}">${tspans}</text>`);
       }
     } else if (type === "arrow") {
       const points = el.points as number[][] | undefined;
@@ -102,7 +102,7 @@ function renderSvgTs(elements: object[]): string {
           `${i === 0 ? "M" : "L"}${x + p[0]} ${y + p[1]}`,
         ).join("");
         const dashAttr = isDashed ? ` stroke-dasharray="5,5"` : "";
-        parts.push(`<path d="${d}" fill="none" stroke="${escapeAttr(stroke)}" stroke-width="2" marker-end="url(#arrowhead)"${dashAttr}/>`);
+        parts.push(`<path d="${d}" fill="none" stroke="${escapeXml(stroke)}" stroke-width="2" marker-end="url(#arrowhead)"${dashAttr}/>`);
       }
     }
   }
@@ -113,8 +113,4 @@ function renderSvgTs(elements: object[]): string {
 
 function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
