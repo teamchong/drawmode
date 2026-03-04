@@ -13,9 +13,8 @@ describe("executeCode", () => {
     expect(error).toBeUndefined();
     expect(result.json).toBeDefined();
 
-    const json = result.json as { type: string; elements: unknown[] };
-    expect(json.type).toBe("excalidraw");
-    expect(json.elements.length).toBeGreaterThan(0);
+    expect(result.json.type).toBe("excalidraw");
+    expect(result.json.elements.length).toBeGreaterThan(0);
   });
 
   it("syntax error returns error message", async () => {
@@ -23,7 +22,7 @@ describe("executeCode", () => {
     const { result, error } = await executeCode(code);
     expect(error).toBeDefined();
     expect(error).toMatch(/Unexpected/i);
-    expect(result.json).toEqual({});
+    expect(result.json.elements).toEqual([]);
   });
 
   it("runtime error returns error message", async () => {
@@ -35,7 +34,7 @@ describe("executeCode", () => {
     const { result, error } = await executeCode(code);
     expect(error).toBeDefined();
     expect(error).toMatch(/not a function|nonExistentMethod/i);
-    expect(result.json).toEqual({});
+    expect(result.json.elements).toEqual([]);
   });
 
   it("code not returning result produces error", async () => {

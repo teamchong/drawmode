@@ -110,6 +110,51 @@ pub fn renderSvg(elements_json: []const u8, out: []u8) !usize {
             written += copySlice(out[written..], "\" stroke-width=\"");
             written += writeInt(out[written..], e.stroke_width);
             written += copySlice(out[written..], "\"/>\n");
+        } else if (e.elem_type == .diamond) {
+            const cx = e.x + @divTrunc(e.w, 2);
+            const cy = e.y + @divTrunc(e.h, 2);
+            written += copySlice(out[written..], "<polygon points=\"");
+            written += writeInt(out[written..], cx);
+            written += copySlice(out[written..], ",");
+            written += writeInt(out[written..], e.y);
+            written += copySlice(out[written..], " ");
+            written += writeInt(out[written..], e.x + e.w);
+            written += copySlice(out[written..], ",");
+            written += writeInt(out[written..], cy);
+            written += copySlice(out[written..], " ");
+            written += writeInt(out[written..], cx);
+            written += copySlice(out[written..], ",");
+            written += writeInt(out[written..], e.y + e.h);
+            written += copySlice(out[written..], " ");
+            written += writeInt(out[written..], e.x);
+            written += copySlice(out[written..], ",");
+            written += writeInt(out[written..], cy);
+            written += copySlice(out[written..], "\" fill=\"");
+            written += writeXmlEscaped(out[written..], e.fill);
+            written += copySlice(out[written..], "\" stroke=\"");
+            written += writeXmlEscaped(out[written..], e.stroke);
+            written += copySlice(out[written..], "\" stroke-width=\"");
+            written += writeInt(out[written..], e.stroke_width);
+            written += copySlice(out[written..], "\"/>\n");
+        } else if (e.elem_type == .frame) {
+            written += copySlice(out[written..], "<rect x=\"");
+            written += writeInt(out[written..], e.x);
+            written += copySlice(out[written..], "\" y=\"");
+            written += writeInt(out[written..], e.y);
+            written += copySlice(out[written..], "\" width=\"");
+            written += writeInt(out[written..], e.w);
+            written += copySlice(out[written..], "\" height=\"");
+            written += writeInt(out[written..], e.h);
+            written += copySlice(out[written..], "\" fill=\"none\" stroke=\"#868e96\" stroke-width=\"2\" stroke-dasharray=\"5,5\" rx=\"4\"/>\n");
+            if (e.text_content.len > 0) {
+                written += copySlice(out[written..], "<text x=\"");
+                written += writeInt(out[written..], e.x + 8);
+                written += copySlice(out[written..], "\" y=\"");
+                written += writeInt(out[written..], e.y + 14);
+                written += copySlice(out[written..], "\" font-family=\"sans-serif\" font-size=\"12\" fill=\"#868e96\">");
+                written += writeXmlEscaped(out[written..], e.text_content);
+                written += copySlice(out[written..], "</text>\n");
+            }
         } else if (e.elem_type == .text) {
             // Position text at center of its bounding box
             const cx = e.x + @divTrunc(e.w, 2);
@@ -181,6 +226,9 @@ pub fn renderSvg(elements_json: []const u8, out: []u8) !usize {
         } else if (e.elem_type == .line or e.elem_type == .arrow) {
             written += renderPath(out[written..], e);
         }
+
+        // Overflow guard: if buffer is nearly full, bail out so caller can fall back
+        if (written + 256 > out.len) return 0;
     }
 
     written += copySlice(out[written..], "</svg>");
@@ -221,7 +269,7 @@ const Point = struct {
     y: i32,
 };
 
-const ElemType = enum { rectangle, ellipse, text, line, arrow, unknown };
+const ElemType = enum { rectangle, ellipse, diamond, frame, text, line, arrow, unknown };
 
 const Elem = struct {
     elem_type: ElemType,
@@ -321,6 +369,11 @@ fn parseElements(json: []const u8, out: *[512]Elem, count: *usize) void {
         } else if (std.mem.eql(u8, type_str, "text")) {
             elem.elem_type = .text;
             elem.text_content = extractStringField(obj, "text") orelse "";
+        } else if (std.mem.eql(u8, type_str, "diamond")) {
+            elem.elem_type = .diamond;
+        } else if (std.mem.eql(u8, type_str, "frame")) {
+            elem.elem_type = .frame;
+            elem.text_content = extractStringField(obj, "name") orelse "";
         } else if (std.mem.eql(u8, type_str, "line")) {
             elem.elem_type = .line;
             elem.point_count = parsePoints(obj, &elem.points);
@@ -423,6 +476,32 @@ test "renderSvg multiline text" {
     try std.testing.expect(std.mem.indexOf(u8, result, "<tspan") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "Line 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "Line 2") != null);
+}
+
+test "renderSvg diamond" {
+    const elements =
+        \\[{"id":"d1","type":"diamond","x":100,"y":100,"width":120,"height":80,"backgroundColor":"#d0bfff","strokeColor":"#7048e8","strokeWidth":2}]
+    ;
+    var out_buf: [8192]u8 = undefined;
+    const written = try renderSvg(elements, &out_buf);
+    try std.testing.expect(written > 0);
+    const result = out_buf[0..written];
+    try std.testing.expect(std.mem.indexOf(u8, result, "<polygon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "160,100") != null); // top: cx,y
+    try std.testing.expect(std.mem.indexOf(u8, result, "220,140") != null); // right: x+w,cy
+}
+
+test "renderSvg frame" {
+    const elements =
+        \\[{"id":"f1","type":"frame","x":50,"y":50,"width":300,"height":200,"name":"My Frame","strokeColor":"#bbb","strokeWidth":1}]
+    ;
+    var out_buf: [8192]u8 = undefined;
+    const written = try renderSvg(elements, &out_buf);
+    try std.testing.expect(written > 0);
+    const result = out_buf[0..written];
+    try std.testing.expect(std.mem.indexOf(u8, result, "stroke-dasharray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "My Frame") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "#868e96") != null);
 }
 
 test "renderSvg xml escaping" {

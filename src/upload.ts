@@ -10,6 +10,7 @@
  * Reference: packages/excalidraw/data/encode.ts in excalidraw/excalidraw
  */
 
+import { z } from "zod";
 import { deflateRawSync } from "node:zlib";
 
 const EXCALIDRAW_API = "https://json.excalidraw.com/api/v2/post/";
@@ -85,6 +86,6 @@ export async function uploadToExcalidraw(jsonString: string): Promise<string> {
     throw new Error(`Excalidraw upload failed: ${resp.status} ${resp.statusText}`);
   }
 
-  const { id } = (await resp.json()) as { id: string };
+  const { id } = z.object({ id: z.string() }).parse(await resp.json());
   return `https://excalidraw.com/#json=${id},${encryptionKey}`;
 }

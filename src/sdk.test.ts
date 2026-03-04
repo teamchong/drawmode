@@ -9,7 +9,7 @@ describe("Diagram SDK", () => {
     expect(id).toMatch(/^box_/);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Array<{ id: string; type: string; containerId?: string; boundElements?: unknown[] }> }).elements;
+    const elements = result.json.elements;
 
     // Should have at least shape + text
     const shape = elements.find(e => e.id === id);
@@ -29,7 +29,7 @@ describe("Diagram SDK", () => {
     expect(id).toMatch(/^ell_/);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Array<{ id: string; type: string }> }).elements;
+    const elements = result.json.elements;
 
     const shape = elements.find(e => e.id === id);
     expect(shape).toBeDefined();
@@ -43,7 +43,7 @@ describe("Diagram SDK", () => {
     d.connect(a, b);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Array<{ type: string; id: string; startBinding?: { elementId: string }; endBinding?: { elementId: string }; x?: number; y?: number; height?: number }> }).elements;
+    const elements = result.json.elements;
 
     const arrow = elements.find(e => e.type === "arrow");
     expect(arrow).toBeDefined();
@@ -66,24 +66,22 @@ describe("Diagram SDK", () => {
     d.connect(a, b, "writes to");
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const elements = result.json.elements;
 
-    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
+    const arrow = elements.find(e => e.type === "arrow")!;
     expect(arrow).toBeDefined();
-    const boundElements = arrow.boundElements as Array<{ type: string; id: string }>;
-    expect(boundElements).toBeTruthy();
-    expect(boundElements.length).toBe(1);
-    expect(boundElements[0].type).toBe("text");
+    expect(arrow.boundElements).toBeTruthy();
+    expect(arrow.boundElements!.length).toBe(1);
+    expect(arrow.boundElements![0].type).toBe("text");
 
-    const labelId = boundElements[0].id;
+    const labelId = arrow.boundElements![0].id;
     // The arrow label has containerId set to the arrow's ID, not the label text ID
-    const arrowId = arrow.id as string;
     const label = elements.find(e =>
-      e.type === "text" && e.containerId === arrowId,
+      e.type === "text" && e.containerId === arrow.id,
     );
     expect(label).toBeDefined();
-    expect((label as Record<string, unknown>).text).toBe("writes to");
-    expect((label as Record<string, unknown>).id).toBe(labelId);
+    expect(label!.text).toBe("writes to");
+    expect(label!.id).toBe(labelId);
   });
 
   it("addGroup creates dashed rectangle + label text", async () => {
@@ -93,7 +91,7 @@ describe("Diagram SDK", () => {
     const grp = d.addGroup("Data Layer", [a, b]);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Array<{ id: string; type: string; strokeStyle?: string; text?: string }> }).elements;
+    const elements = result.json.elements;
 
     const groupRect = elements.find(e => e.id === grp);
     expect(groupRect).toBeDefined();
@@ -113,12 +111,11 @@ describe("Diagram SDK", () => {
     const result = await d.render({ format: "excalidraw" });
     expect(result.json).toBeDefined();
 
-    const json = result.json as { type: string; version: number; source: string; elements: unknown[]; appState: unknown };
-    expect(json.type).toBe("excalidraw");
-    expect(json.version).toBe(2);
-    expect(json.source).toBe("drawmode");
-    expect(Array.isArray(json.elements)).toBe(true);
-    expect(json.appState).toBeDefined();
+    expect(result.json.type).toBe("excalidraw");
+    expect(result.json.version).toBe(2);
+    expect(result.json.source).toBe("drawmode");
+    expect(Array.isArray(result.json.elements)).toBe(true);
+    expect(result.json.appState).toBeDefined();
   });
 
   it("multiple arrows from same source are staggered", async () => {
@@ -130,7 +127,7 @@ describe("Diagram SDK", () => {
     d.connect(src, t2);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Array<{ type: string; x: number }> }).elements;
+    const elements = result.json.elements;
 
     const arrows = elements.filter(e => e.type === "arrow");
     expect(arrows.length).toBe(2);
@@ -162,8 +159,8 @@ describe("Diagram SDK", () => {
     });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const shape = elements.find(e => e.id === id)!;
 
     expect(shape.fillStyle).toBe("hachure");
     expect(shape.roughness).toBe(0);
@@ -179,8 +176,8 @@ describe("Diagram SDK", () => {
     });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const shape = elements.find(e => e.id === id)!;
 
     expect(shape.strokeStyle).toBe("dotted");
     expect(shape.strokeWidth).toBe(4);
@@ -195,8 +192,8 @@ describe("Diagram SDK", () => {
     });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const text = elements.find(e => e.id === `${id}-text`) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const text = elements.find(e => e.id === `${id}-text`)!;
 
     expect(text.fontSize).toBe(24);
     expect(text.fontFamily).toBe(2);
@@ -207,8 +204,8 @@ describe("Diagram SDK", () => {
     const id = d.addBox("Sharp", { row: 0, col: 0, roundness: null });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const shape = elements.find(e => e.id === id)!;
 
     expect(shape.roundness).toBeNull();
   });
@@ -225,8 +222,8 @@ describe("Diagram SDK", () => {
     });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
+    const elements = result.json.elements;
+    const arrow = elements.find(e => e.type === "arrow")!;
 
     expect(arrow.startArrowhead).toBe("dot");
     expect(arrow.endArrowhead).toBe("triangle");
@@ -239,12 +236,12 @@ describe("Diagram SDK", () => {
     d.connect(a, b, undefined, { elbowed: false });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
+    const elements = result.json.elements;
+    const arrow = elements.find(e => e.type === "arrow")!;
 
     expect(arrow.elbowed).toBe(false);
     // Straight arrow: only 2 points
-    expect((arrow.points as number[][]).length).toBe(2);
+    expect(arrow.points!.length).toBe(2);
   });
 
   it("arrow opts: strokeColor and strokeWidth", async () => {
@@ -254,8 +251,8 @@ describe("Diagram SDK", () => {
     d.connect(a, b, undefined, { strokeColor: "#ff0000", strokeWidth: 4 });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
+    const elements = result.json.elements;
+    const arrow = elements.find(e => e.type === "arrow")!;
 
     expect(arrow.strokeColor).toBe("#ff0000");
     expect(arrow.strokeWidth).toBe(4);
@@ -268,10 +265,9 @@ describe("Diagram SDK", () => {
     d.connect(a, b, "big label", { labelFontSize: 20 });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
-    const arrowId = arrow.id as string;
-    const label = elements.find(e => e.type === "text" && (e as Record<string, unknown>).containerId === arrowId) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const arrow = elements.find(e => e.type === "arrow")!;
+    const label = elements.find(e => e.type === "text" && e.containerId === arrow.id)!;
 
     expect(label.fontSize).toBe(20);
   });
@@ -288,8 +284,8 @@ describe("Diagram SDK", () => {
     });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const shape = elements.find(e => e.id === id)!;
 
     expect(shape.strokeColor).toBe("#ff0000");
     expect(shape.backgroundColor).toBe("#00ff00");
@@ -302,8 +298,8 @@ describe("Diagram SDK", () => {
     const id = d.addText("Hello World", { x: 50, y: 50, fontSize: 20 });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const text = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const text = elements.find(e => e.id === id)!;
 
     expect(text).toBeDefined();
     expect(text.type).toBe("text");
@@ -324,14 +320,14 @@ describe("Diagram SDK", () => {
     });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const line = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const line = elements.find(e => e.id === id)!;
 
     expect(line).toBeDefined();
     expect(line.type).toBe("line");
     expect(line.strokeColor).toBe("#ff0000");
     expect(line.strokeWidth).toBe(3);
-    expect((line.points as number[][]).length).toBe(2);
+    expect(line.points!.length).toBe(2);
   });
 
   // ── New: Cloud palette colors ──
@@ -342,13 +338,13 @@ describe("Diagram SDK", () => {
     const k8s = d.addBox("Pod", { row: 0, col: 1, color: "k8s-pod" });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const elements = result.json.elements;
 
-    const awsShape = elements.find(e => e.id === aws) as Record<string, unknown>;
+    const awsShape = elements.find(e => e.id === aws)!;
     expect(awsShape.backgroundColor).toBe("#FF9900");
     expect(awsShape.strokeColor).toBe("#C27400");
 
-    const k8sShape = elements.find(e => e.id === k8s) as Record<string, unknown>;
+    const k8sShape = elements.find(e => e.id === k8s)!;
     expect(k8sShape.backgroundColor).toBe("#326CE5");
     expect(k8sShape.strokeColor).toBe("#264FAB");
   });
@@ -381,8 +377,7 @@ describe("Diagram SDK", () => {
 
     // Re-render to check it produces valid output
     const result = await d2.render({ format: "excalidraw", path: testFile });
-    const json = result.json as { elements: unknown[] };
-    expect(json.elements.length).toBeGreaterThan(0);
+    expect(result.json.elements.length).toBeGreaterThan(0);
   });
 
   it("fromFile round-trip preserves frames", async () => {
@@ -401,9 +396,9 @@ describe("Diagram SDK", () => {
 
     // Re-render and check frame survives
     const result = await d2.render({ format: "excalidraw", path: testFile });
-    const els = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const els = result.json.elements;
 
-    const frame = els.find(e => e.type === "frame") as Record<string, unknown>;
+    const frame = els.find(e => e.type === "frame")!;
     expect(frame).toBeDefined();
     expect(frame.name).toBe("Backend");
 
@@ -420,9 +415,9 @@ describe("Diagram SDK", () => {
 
     const d2 = await Diagram.fromFile(testFile);
     const result = await d2.render({ format: "excalidraw", path: testFile });
-    const els = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const els = result.json.elements;
 
-    const shape = els.find(e => e.type === "rectangle") as Record<string, unknown>;
+    const shape = els.find(e => e.type === "rectangle")!;
     expect(shape.link).toBe("https://example.com");
     expect(shape.customData).toEqual({ env: "prod" });
   });
@@ -434,11 +429,11 @@ describe("Diagram SDK", () => {
 
     const d2 = await Diagram.fromFile(testFile);
     const result = await d2.render({ format: "excalidraw", path: testFile });
-    const els = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const els = result.json.elements;
 
-    const diamond = els.find(e => e.type === "diamond") as Record<string, unknown>;
+    const diamond = els.find(e => e.type === "diamond")!;
     expect(diamond).toBeDefined();
-    const text = els.find(e => (e as Record<string, unknown>).containerId === diamond.id) as Record<string, unknown>;
+    const text = els.find(e => e.containerId === diamond.id)!;
     expect(text.text).toBe("Yes?");
   });
 
@@ -461,8 +456,8 @@ describe("Diagram SDK", () => {
     d.updateNode(id, { label: "New Name", color: "ai" });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const textEl = elements.find(e => e.id === `${id}-text`) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const textEl = elements.find(e => e.id === `${id}-text`)!;
 
     expect(textEl.text).toBe("New Name");
   });
@@ -503,8 +498,8 @@ describe("Diagram SDK", () => {
     const id = d.addBox("Absolute", { x: 500, y: 300 });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const shape = elements.find(e => e.id === id)!;
 
     expect(shape.x).toBe(500);
     expect(shape.y).toBe(300);
@@ -518,16 +513,16 @@ describe("Diagram SDK", () => {
     expect(id).toMatch(/^dia_/);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const elements = result.json.elements;
 
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const shape = elements.find(e => e.id === id)!;
     expect(shape).toBeDefined();
     expect(shape.type).toBe("diamond");
     // Default color should be "backend" (purple), same as addBox
     expect(shape.backgroundColor).toBe("#d0bfff");
     expect(shape.strokeColor).toBe("#7048e8");
 
-    const text = elements.find(e => e.id === `${id}-text`) as Record<string, unknown>;
+    const text = elements.find(e => e.id === `${id}-text`)!;
     expect(text).toBeDefined();
     expect(text.text).toBe("Decision?");
     expect(text.containerId).toBe(id);
@@ -542,7 +537,7 @@ describe("Diagram SDK", () => {
     d.connect(decision, end, "yes");
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const elements = result.json.elements;
 
     const arrows = elements.filter(e => e.type === "arrow");
     expect(arrows.length).toBe(2);
@@ -562,8 +557,8 @@ describe("Diagram SDK", () => {
     expect(edges[0].label).toBe("new label");
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
+    const elements = result.json.elements;
+    const arrow = elements.find(e => e.type === "arrow")!;
     expect(arrow.strokeStyle).toBe("dashed");
   });
 
@@ -649,8 +644,8 @@ describe("Diagram SDK", () => {
     const id = d.addBox("Click me", { row: 0, col: 0, link: "https://example.com" });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const shape = elements.find(e => e.id === id)!;
 
     expect(shape.link).toBe("https://example.com");
   });
@@ -660,8 +655,8 @@ describe("Diagram SDK", () => {
     const id = d.addBox("Meta", { row: 0, col: 0, customData: { service: "api", tier: 1 } });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const shape = elements.find(e => e.id === id)!;
 
     expect(shape.customData).toEqual({ service: "api", tier: 1 });
   });
@@ -673,8 +668,8 @@ describe("Diagram SDK", () => {
     d.connect(a, b, "flow", { customData: { protocol: "grpc" } });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
+    const elements = result.json.elements;
+    const arrow = elements.find(e => e.type === "arrow")!;
 
     expect(arrow.customData).toEqual({ protocol: "grpc" });
   });
@@ -684,8 +679,8 @@ describe("Diagram SDK", () => {
     const id = d.addBox("Plain", { row: 0, col: 0 });
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
-    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    const elements = result.json.elements;
+    const shape = elements.find(e => e.id === id)!;
 
     expect("customData" in shape).toBe(false);
   });
@@ -703,7 +698,7 @@ describe("Diagram SDK", () => {
     d.removeGroup(grp);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const elements = result.json.elements;
 
     // Group boundary should be gone
     expect(elements.find(e => e.id === grp)).toBeUndefined();
@@ -722,12 +717,12 @@ describe("Diagram SDK", () => {
     d.removeFrame(frm);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const elements = result.json.elements;
 
     // Frame element should be gone
     expect(elements.find(e => e.id === frm)).toBeUndefined();
     // Children should not have frameId
-    const shapeA = elements.find(e => e.id === a) as Record<string, unknown>;
+    const shapeA = elements.find(e => e.id === a)!;
     expect(shapeA.frameId).toBeNull();
     // Children still exist
     expect(shapeA).toBeDefined();
@@ -743,13 +738,13 @@ describe("Diagram SDK", () => {
     d.removeNode(a);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const elements = result.json.elements;
 
     // Frame should still exist with only B
-    const frame = elements.find(e => e.id === frm) as Record<string, unknown>;
+    const frame = elements.find(e => e.id === frm)!;
     expect(frame).toBeDefined();
     // B should have frameId
-    const shapeB = elements.find(e => e.id === b) as Record<string, unknown>;
+    const shapeB = elements.find(e => e.id === b)!;
     expect(shapeB.frameId).toBe(frm);
     // A should be gone
     expect(elements.find(e => e.id === a)).toBeUndefined();
@@ -764,23 +759,23 @@ describe("Diagram SDK", () => {
     const frm = d.addFrame("My Frame", [a, b]);
 
     const result = await d.render({ format: "excalidraw" });
-    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const elements = result.json.elements;
 
     // Frame element exists
-    const frame = elements.find(e => e.id === frm) as Record<string, unknown>;
+    const frame = elements.find(e => e.id === frm)!;
     expect(frame).toBeDefined();
     expect(frame.type).toBe("frame");
     expect(frame.name).toBe("My Frame");
 
     // Children have frameId set
-    const shapeA = elements.find(e => e.id === a) as Record<string, unknown>;
+    const shapeA = elements.find(e => e.id === a)!;
     expect(shapeA.frameId).toBe(frm);
 
-    const shapeB = elements.find(e => e.id === b) as Record<string, unknown>;
+    const shapeB = elements.find(e => e.id === b)!;
     expect(shapeB.frameId).toBe(frm);
 
     // Bound text elements also get frameId
-    const textA = elements.find(e => e.id === `${a}-text`) as Record<string, unknown>;
+    const textA = elements.find(e => e.id === `${a}-text`)!;
     expect(textA.frameId).toBe(frm);
   });
 });

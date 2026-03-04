@@ -7,7 +7,9 @@
  */
 
 import { Diagram } from "./sdk.js";
-import type { RenderResult, RenderOpts } from "./types.js";
+import type { RenderResult, RenderOpts, ExcalidrawFile } from "./types.js";
+
+const EMPTY_FILE: ExcalidrawFile = { type: "excalidraw" as const, version: 2, elements: [] };
 
 export interface ExecuteResult {
   result: RenderResult;
@@ -43,7 +45,7 @@ export async function executeCode(code: string, renderOpts?: RenderOpts): Promis
 
     if (!result || typeof result !== "object") {
       return {
-        result: { json: {} },
+        result: { json: EMPTY_FILE },
         error: "Code did not return a RenderResult. Make sure to return d.render().",
       };
     }
@@ -52,7 +54,7 @@ export async function executeCode(code: string, renderOpts?: RenderOpts): Promis
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     return {
-      result: { json: {} },
+      result: { json: EMPTY_FILE },
       error: message,
     };
   }

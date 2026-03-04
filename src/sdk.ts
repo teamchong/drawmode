@@ -7,8 +7,9 @@ import type {
   ColorPreset, ShapeOpts, ConnectOpts, RenderOpts, RenderResult,
   GraphNode, GraphEdge, FillStyle, StrokeStyle, FontFamily,
   Arrowhead, TextAlign, VerticalAlign, ColorPair,
+  ExcalidrawElement, ExcalidrawFile,
 } from "./types.js";
-import { COLOR_PALETTE } from "./types.js";
+import { COLOR_PALETTE, ExcalidrawFileSchema } from "./types.js";
 import {
   validateElements, isWasmLoaded,
   layoutGraphWasm,
@@ -43,7 +44,7 @@ export class Diagram {
   private groups = new Map<string, { label: string; children: string[] }>();
   private frames = new Map<string, { name: string; children: string[] }>();
   /** Passthrough elements from fromFile() — re-emitted unchanged */
-  private passthrough: object[] = [];
+  private passthrough: ExcalidrawElement[] = [];
   private idCounter = 0;
 
   private nextId(prefix: string): string {
@@ -172,16 +173,17 @@ export class Diagram {
   static async fromFile(this: new () => Diagram, path: string): Promise<Diagram> {
     const { readFile } = await import("node:fs/promises");
     const raw = await readFile(path, "utf-8");
-    const json = JSON.parse(raw);
-    const elements: Record<string, unknown>[] = json.elements ?? [];
+    const parsed = ExcalidrawFileSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) throw new Error(`Invalid .excalidraw file: ${parsed.error.message}`);
+    const elements = parsed.data.elements;
 
     const d = new this();
 
     // Index text elements by containerId for label lookup
-    const textByContainer = new Map<string, Record<string, unknown>>();
+    const textByContainer = new Map<string, ExcalidrawElement>();
     for (const el of elements) {
       if (el.type === "text" && el.containerId) {
-        textByContainer.set(el.containerId as string, el);
+        textByContainer.set(el.containerId, el);
       }
     }
 
@@ -190,116 +192,112 @@ export class Diagram {
     for (const el of elements) {
       if ((el.type === "rectangle" || el.type === "ellipse") &&
           el.strokeStyle === "dashed" && el.backgroundColor === "transparent" &&
-          (el.opacity as number) <= 70) {
-        const elId = el.id as string;
-        const labelEl = elements.find(e => e.type === "text" && e.id === `${elId}-label`);
-        if (labelEl) groupIds.add(elId);
+          (el.opacity ?? 100) <= 70) {
+        const labelEl = elements.find(e => e.type === "text" && e.id === `${el.id}-label`);
+        if (labelEl) groupIds.add(el.id);
       }
     }
 
     // Reconstruct nodes from shapes
     for (const el of elements) {
-      const elType = el.type as string;
-      const elId = el.id as string;
-
-      if (elType === "rectangle" || elType === "ellipse" || elType === "diamond") {
+      if (el.type === "rectangle" || el.type === "ellipse" || el.type === "diamond") {
         // Detect group boundaries: must have companion "-label" text, dashed stroke,
         // transparent background, and low opacity. The "-label" check distinguishes
         // drawmode groups from user shapes that happen to be dashed + low opacity.
         const labelEl = elements.find(
-          e => e.type === "text" && e.id === `${elId}-label`,
+          e => e.type === "text" && e.id === `${el.id}-label`,
         );
-        if (elType !== "diamond" && labelEl && el.strokeStyle === "dashed" &&
-            el.backgroundColor === "transparent" && (el.opacity as number) <= 70) {
-          d.groups.set(elId, {
-            label: (labelEl?.text as string) ?? "",
+        if (el.type !== "diamond" && labelEl && el.strokeStyle === "dashed" &&
+            el.backgroundColor === "transparent" && (el.opacity ?? 100) <= 70) {
+          d.groups.set(el.id, {
+            label: labelEl?.text ?? "",
             children: [], // Reconstructed below after all nodes are loaded
-            _bounds: { x: el.x as number, y: el.y as number, w: el.width as number, h: el.height as number },
+            _bounds: { x: el.x, y: el.y, w: el.width, h: el.height },
           } as { label: string; children: string[]; _bounds?: { x: number; y: number; w: number; h: number } });
           continue;
         }
 
-        const boundText = textByContainer.get(elId);
-        const label = (boundText?.text as string) ?? "";
+        const boundText = textByContainer.get(el.id);
+        const label = boundText?.text ?? "";
 
         const node: GraphNode = {
-          id: elId,
+          id: el.id,
           label,
-          type: elType as GraphNode["type"],
-          width: el.width as number,
-          height: el.height as number,
+          type: el.type as GraphNode["type"],
+          width: el.width,
+          height: el.height,
           color: {
-            background: el.backgroundColor as string,
-            stroke: el.strokeColor as string,
+            background: el.backgroundColor ?? "",
+            stroke: el.strokeColor ?? "",
           },
           opts: {
             fillStyle: el.fillStyle as FillStyle | undefined,
-            strokeWidth: el.strokeWidth as number | undefined,
+            strokeWidth: el.strokeWidth,
             strokeStyle: el.strokeStyle as StrokeStyle | undefined,
-            roughness: el.roughness as number | undefined,
-            opacity: el.opacity as number | undefined,
-            roundness: el.roundness as { type: number } | null | undefined,
-            strokeColor: el.strokeColor as string | undefined,
-            backgroundColor: el.backgroundColor as string | undefined,
-            fontSize: boundText?.fontSize as number | undefined,
+            roughness: el.roughness,
+            opacity: el.opacity,
+            roundness: el.roundness,
+            strokeColor: el.strokeColor,
+            backgroundColor: el.backgroundColor,
+            fontSize: boundText?.fontSize,
             fontFamily: boundText?.fontFamily as FontFamily | undefined,
             textAlign: boundText?.textAlign as TextAlign | undefined,
             verticalAlign: boundText?.verticalAlign as VerticalAlign | undefined,
-            link: el.link as string | null | undefined,
+            link: el.link,
             ...(el.customData !== undefined ? { customData: el.customData as Record<string, unknown> } : {}),
           },
-          absX: el.x as number,
-          absY: el.y as number,
+          absX: el.x,
+          absY: el.y,
         };
-        d.nodes.set(elId, node);
-      } else if (elType === "arrow") {
-        const startId = (el.startBinding as { elementId?: string })?.elementId;
-        const endId = (el.endBinding as { elementId?: string })?.elementId;
+        d.nodes.set(el.id, node);
+      } else if (el.type === "arrow") {
+        const startId = el.startBinding?.elementId;
+        const endId = el.endBinding?.elementId;
         if (startId && endId) {
-          const arrowLabel = textByContainer.get(elId);
+          const arrowLabel = textByContainer.get(el.id);
           d.edges.push({
             from: startId,
             to: endId,
-            label: arrowLabel?.text as string | undefined,
+            label: arrowLabel?.text,
             style: (el.strokeStyle as StrokeStyle) ?? "solid",
             opts: {
-              strokeColor: el.strokeColor as string | undefined,
-              strokeWidth: el.strokeWidth as number | undefined,
-              roughness: el.roughness as number | undefined,
-              opacity: el.opacity as number | undefined,
+              strokeColor: el.strokeColor,
+              strokeWidth: el.strokeWidth,
+              roughness: el.roughness,
+              opacity: el.opacity,
               startArrowhead: el.startArrowhead as Arrowhead | undefined,
               endArrowhead: el.endArrowhead as Arrowhead | undefined,
-              elbowed: el.elbowed as boolean | undefined,
-              labelFontSize: arrowLabel?.fontSize as number | undefined,
+              elbowed: el.elbowed,
+              labelFontSize: arrowLabel?.fontSize,
             },
           });
         } else {
           // Arrow without both bindings — passthrough
           d.passthrough.push(el);
         }
-      } else if (elType === "text" && !el.containerId) {
+      } else if (el.type === "text" && !el.containerId) {
         // Skip group label text elements (detected in pre-scan above)
-        if (elId.endsWith("-label") && groupIds.has(elId.replace(/-label$/, ""))) continue;
+        if (el.id.endsWith("-label") && groupIds.has(el.id.replace(/-label$/, ""))) continue;
 
         // Standalone text — add as text node
-        d.nodes.set(elId, {
-          id: elId,
-          label: el.text as string,
+        d.nodes.set(el.id, {
+          id: el.id,
+          label: el.text ?? "",
           type: "text",
-          width: el.width as number,
-          height: el.height as number,
-          color: { background: "transparent", stroke: el.strokeColor as string },
-          opts: { fontSize: el.fontSize as number, fontFamily: el.fontFamily as FontFamily },
-          absX: el.x as number,
-          absY: el.y as number,
+          width: el.width,
+          height: el.height,
+          color: { background: "transparent", stroke: el.strokeColor ?? "" },
+          opts: { fontSize: el.fontSize, fontFamily: el.fontFamily as FontFamily | undefined },
+          absX: el.x,
+          absY: el.y,
         });
-      } else if (elType === "frame") {
+      } else if (el.type === "frame") {
         // Native Excalidraw frame — reconstruct into frames map
-        d.frames.set(elId, {
-          name: (el.name as string) ?? "",
+        d.frames.set(el.id, {
+          name: el.name ?? "",
           children: [], // Populated below using frameId references
         });
-      } else if (elType === "text" && el.containerId) {
+      } else if (el.type === "text" && el.containerId) {
         // Bound text — already handled via textByContainer, skip
       } else {
         // Unknown element type — passthrough
@@ -323,12 +321,10 @@ export class Diagram {
 
     // Reconstruct frame children: nodes whose element had frameId set
     for (const el of elements) {
-      const fid = el.frameId as string | null | undefined;
-      if (fid && d.frames.has(fid)) {
-        const elId = el.id as string;
+      if (el.frameId && d.frames.has(el.frameId)) {
         // Only add shape nodes (not bound text elements) as frame children
-        if (d.nodes.has(elId)) {
-          d.frames.get(fid)!.children.push(elId);
+        if (d.nodes.has(el.id)) {
+          d.frames.get(el.frameId)!.children.push(el.id);
         }
       }
     }
@@ -446,8 +442,8 @@ export class Diagram {
       }
     }
 
-    const excalidrawJson = {
-      type: "excalidraw",
+    const excalidrawJson: ExcalidrawFile = {
+      type: "excalidraw" as const,
       version: 2,
       source: "drawmode",
       elements,
@@ -502,8 +498,8 @@ export class Diagram {
   }
 
   /** Convert the graph to Excalidraw elements with layout. */
-  private async buildElements(): Promise<object[]> {
-    const elements: object[] = [];
+  private async buildElements(): Promise<ExcalidrawElement[]> {
+    const elements: ExcalidrawElement[] = [];
     const { positioned, edgeRoutes } = await this.layoutNodes();
 
     // Pre-compute arrow bindings per shape: arrowId will be assigned later,
@@ -860,6 +856,29 @@ export class Diagram {
       }
     }
 
+    // Arrow label collision avoidance: shift overlapping labels vertically
+    const labelElements = elements.filter(
+      el => el.type === "text" && el.containerId && arrowIds.includes(el.containerId),
+    );
+    for (let i = 1; i < labelElements.length; i++) {
+      const cur = labelElements[i];
+      const curW = cur.width;
+      const curH = cur.height;
+      for (let j = 0; j < i; j++) {
+        const prev = labelElements[j];
+        // Check overlap
+        if (
+          cur.x < prev.x + prev.width &&
+          cur.x + curW > prev.x &&
+          cur.y < prev.y + prev.height &&
+          cur.y + curH > prev.y
+        ) {
+          // Shift current label below the overlapping one
+          cur.y = prev.y + prev.height + 4;
+        }
+      }
+    }
+
     // Groups: dashed rectangle around children + label
     for (const [groupId, group] of this.groups) {
       const childNodes = group.children
@@ -989,13 +1008,12 @@ export class Diagram {
 
       // Set frameId on child elements
       for (const el of elements) {
-        const elObj = el as Record<string, unknown>;
-        if (frame.children.includes(elObj.id as string)) {
-          elObj.frameId = frameId;
+        if (frame.children.includes(el.id)) {
+          el.frameId = frameId;
         }
         // Also tag bound text elements
-        if (elObj.containerId && frame.children.includes(elObj.containerId as string)) {
-          elObj.frameId = frameId;
+        if (el.containerId && frame.children.includes(el.containerId)) {
+          el.frameId = frameId;
         }
       }
     }

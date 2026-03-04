@@ -83,9 +83,7 @@ declare class Diagram {
         parts.push({ type: "text" as const, text: `Saved to: ${result.filePath}` });
       }
 
-      const elementCount = Array.isArray((result.json as { elements?: unknown[] }).elements)
-        ? (result.json as { elements: unknown[] }).elements.length
-        : 0;
+      const elementCount = result.json.elements.length;
       parts.push({ type: "text" as const, text: `Generated ${elementCount} elements` });
 
       if (format === "excalidraw") {
@@ -101,8 +99,8 @@ declare class Diagram {
         parts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
       }
 
-      const elements = (result.json as { elements?: unknown[] }).elements;
-      if (elements && Array.isArray(elements) && elements.length > 0) {
+      const { elements } = result.json;
+      if (elements.length > 0) {
         return {
           content: parts,
           structuredContent: {

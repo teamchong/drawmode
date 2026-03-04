@@ -5,10 +5,11 @@
  * PNG: Uses WASM renderPng directly (no external dependencies).
  */
 
+import type { ExcalidrawElement } from "./types.js";
 import { renderSvg as wasmRenderSvg, renderPng as wasmRenderPng, isWasmLoaded } from "./layout.js";
 
 /** Export Excalidraw elements to SVG string. */
-export function exportToSvg(elements: object[]): string {
+export function exportToSvg(elements: ExcalidrawElement[]): string {
   // Try WASM renderer first
   if (isWasmLoaded()) {
     const result = wasmRenderSvg(JSON.stringify(elements));
@@ -20,34 +21,30 @@ export function exportToSvg(elements: object[]): string {
 }
 
 /** Export Excalidraw elements to PNG bytes. Returns null if WASM is unavailable. */
-export async function exportToPng(elements: object[]): Promise<Uint8Array | null> {
+export async function exportToPng(elements: ExcalidrawElement[]): Promise<Uint8Array | null> {
   if (!isWasmLoaded()) return null;
 
   const result = wasmRenderPng(JSON.stringify(elements));
   return result ?? null;
 }
 
-type Elem = Record<string, unknown>;
-
 /** Fallback TS SVG renderer for when WASM is unavailable. */
-function renderSvgTs(elements: object[]): string {
-  const elems = elements as Elem[];
-
+function renderSvgTs(elements: ExcalidrawElement[]): string {
   // Calculate viewBox from element bounding boxes
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
-  for (const el of elems) {
-    const x = (el.x as number) ?? 0;
-    const y = (el.y as number) ?? 0;
-    const w = (el.width as number) ?? 0;
-    const h = (el.height as number) ?? 0;
+  for (const el of elements) {
+    const x = el.x;
+    const y = el.y;
+    const w = el.width;
+    const h = el.height;
     if (x < minX) minX = x;
     if (y < minY) minY = y;
     if (x + w > maxX) maxX = x + w;
     if (y + h > maxY) maxY = y + h;
     // Expand viewBox for arrow/line points that extend beyond element bounds
-    const points = el.points as number[][] | undefined;
-    if (points) {
+    if (el.points) {
+      const points = el.points;
       for (const p of points) {
         const px = x + p[0], py = y + p[1];
         if (px < minX) minX = px;
@@ -65,18 +62,18 @@ function renderSvgTs(elements: object[]): string {
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${maxX - minX} ${maxY - minY}" style="background:#ffffff">`);
   parts.push(`<defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#333"/></marker></defs>`);
 
-  for (const el of elems) {
-    const type = el.type as string;
-    const x = (el.x as number) ?? 0;
-    const y = (el.y as number) ?? 0;
-    const w = (el.width as number) ?? 0;
-    const h = (el.height as number) ?? 0;
-    const fill = (el.backgroundColor as string) ?? "#ffffff";
-    const stroke = (el.strokeColor as string) ?? "#333333";
-    const strokeStyle = (el.strokeStyle as string) ?? "solid";
+  for (const el of elements) {
+    const type = el.type;
+    const x = el.x;
+    const y = el.y;
+    const w = el.width;
+    const h = el.height;
+    const fill = el.backgroundColor ?? "#ffffff";
+    const stroke = el.strokeColor ?? "#333333";
+    const strokeStyle = el.strokeStyle ?? "solid";
     const isDashed = strokeStyle === "dashed";
 
-    const sw = (el.strokeWidth as number) ?? 2;
+    const sw = el.strokeWidth ?? 2;
 
     if (type === "rectangle") {
       const dashAttr = isDashed ? ` stroke-dasharray="5,5" opacity="0.4"` : "";
@@ -89,15 +86,15 @@ function renderSvgTs(elements: object[]): string {
       const pts = `${cx},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`;
       parts.push(`<polygon points="${pts}" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="${sw}"/>`);
     } else if (type === "frame") {
-      const name = (el.name as string) ?? "";
+      const name = el.name ?? "";
       const dashAttr = ` stroke-dasharray="5,5"`;
-      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#bbb" stroke-width="1" rx="4"${dashAttr}/>`);
+      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#868e96" stroke-width="2" rx="4"${dashAttr}/>`);
       if (name) {
-        parts.push(`<text x="${x + 8}" y="${y + 14}" font-family="sans-serif" font-size="12" fill="#999">${escapeXml(name)}</text>`);
+        parts.push(`<text x="${x + 8}" y="${y + 14}" font-family="sans-serif" font-size="12" fill="#868e96">${escapeXml(name)}</text>`);
       }
     } else if (type === "text") {
       const rawText = String(el.text ?? "");
-      const fontSize = (el.fontSize as number) ?? 16;
+      const fontSize = el.fontSize ?? 16;
       // Center text in its bounding box
       const cx = x + w / 2;
       const cy = y + h / 2;
@@ -117,8 +114,8 @@ function renderSvgTs(elements: object[]): string {
         parts.push(`<text text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="${fontSize}" fill="${escapeXml(stroke)}">${tspans}</text>`);
       }
     } else if (type === "line" || type === "arrow") {
-      const points = el.points as number[][] | undefined;
-      if (points && points.length > 0) {
+      if (el.points && el.points.length > 0) {
+        const points = el.points;
         const d = points.map((p, i) =>
           `${i === 0 ? "M" : "L"}${x + p[0]} ${y + p[1]}`,
         ).join("");

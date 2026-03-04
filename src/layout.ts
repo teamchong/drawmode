@@ -5,6 +5,8 @@
  * Layout priority: WASM Sugiyama → TS grid (in sdk.ts)
  */
 
+import { z } from "zod";
+
 let _dirname: string | undefined;
 async function getDirname(): Promise<string> {
   if (!_dirname) {
@@ -145,12 +147,18 @@ export async function layoutGraphWasm(
 
   if (written === 0) return null;
 
+  const WasmLayoutOutputSchema = z.object({
+    nodes: z.array(z.object({ id: z.string(), x: z.number(), y: z.number() })),
+    edges: z.array(z.object({
+      from: z.string(),
+      to: z.string(),
+      points: z.array(z.tuple([z.number(), z.number()])),
+    })).optional(),
+  });
+
   try {
     const resultStr = new TextDecoder().decode(readFromWasm(outPtr, written));
-    const result = JSON.parse(resultStr) as {
-      nodes: { id: string; x: number; y: number }[];
-      edges: { from: string; to: string; points: [number, number][] }[];
-    };
+    const result = WasmLayoutOutputSchema.parse(JSON.parse(resultStr));
 
     // Build edge routes map
     const edgeRoutes = new Map<string, EdgeRoute>();
@@ -193,11 +201,11 @@ export function validateElements(elementsJson: string): string | null {
 /** Render Excalidraw elements to SVG using WASM. */
 export function renderSvg(elementsJson: string): string | null {
   if (!wasmInstance) return null;
-  return callWasm(wasmInstance.renderSvg.bind(wasmInstance), elementsJson, 512 * 1024);
+  return callWasm(wasmInstance.renderSvg.bind(wasmInstance), elementsJson, 2 * 1024 * 1024);
 }
 
 /** Render Excalidraw elements to PNG using WASM. Returns PNG bytes or null. */
 export function renderPng(elementsJson: string): Uint8Array | null {
   if (!wasmInstance) return null;
-  return callWasmBinary(wasmInstance.renderPng.bind(wasmInstance), elementsJson, 4 * 1024 * 1024);
+  return callWasmBinary(wasmInstance.renderPng.bind(wasmInstance), elementsJson, 8 * 1024 * 1024);
 }

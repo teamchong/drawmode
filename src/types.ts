@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /** Excalidraw fill styles */
 export type FillStyle = "solid" | "hachure" | "cross-hatch" | "zigzag";
 
@@ -120,12 +122,81 @@ export interface ConnectOpts {
   customData?: Record<string, unknown> | null;
 }
 
+// ── Zod Schemas for Excalidraw elements ──
+
+const BindingSchema = z.object({
+  elementId: z.string(),
+  focus: z.number(),
+  gap: z.number(),
+}).passthrough();
+
+export const ExcalidrawElementSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  angle: z.number().optional(),
+  strokeColor: z.string().optional(),
+  backgroundColor: z.string().optional(),
+  fillStyle: z.string().optional(),
+  strokeWidth: z.number().optional(),
+  strokeStyle: z.string().optional(),
+  roughness: z.number().optional(),
+  opacity: z.number().optional(),
+  roundness: z.object({ type: z.number() }).nullable().optional(),
+  seed: z.number().optional(),
+  version: z.number().optional(),
+  versionNonce: z.number().optional(),
+  isDeleted: z.boolean().optional(),
+  groupIds: z.array(z.string()).optional(),
+  frameId: z.string().nullable().optional(),
+  boundElements: z.array(z.object({ type: z.string(), id: z.string() })).nullable().optional(),
+  updated: z.number().optional(),
+  locked: z.boolean().optional(),
+  link: z.string().nullable().optional(),
+  customData: z.record(z.unknown()).nullable().optional(),
+  // Text fields
+  text: z.string().optional(),
+  fontSize: z.number().optional(),
+  fontFamily: z.number().optional(),
+  lineHeight: z.number().optional(),
+  textAlign: z.string().optional(),
+  verticalAlign: z.string().optional(),
+  containerId: z.string().nullable().optional(),
+  originalText: z.string().optional(),
+  autoResize: z.boolean().optional(),
+  // Arrow/Line fields
+  points: z.array(z.array(z.number())).optional(),
+  startBinding: BindingSchema.nullable().optional(),
+  endBinding: BindingSchema.nullable().optional(),
+  startArrowhead: z.string().nullable().optional(),
+  endArrowhead: z.string().nullable().optional(),
+  elbowed: z.boolean().optional(),
+  // Frame fields
+  name: z.string().optional(),
+}).passthrough();
+
+export type ExcalidrawElement = z.infer<typeof ExcalidrawElementSchema>;
+
+export const ExcalidrawFileSchema = z.object({
+  type: z.literal("excalidraw"),
+  version: z.number(),
+  source: z.string().optional(),
+  elements: z.array(ExcalidrawElementSchema),
+  appState: z.record(z.unknown()).optional(),
+  files: z.record(z.unknown()).optional(),
+}).passthrough();
+
+export type ExcalidrawFile = z.infer<typeof ExcalidrawFileSchema>;
+
 /** Output format options */
 export type OutputFormat = "excalidraw" | "url" | "png" | "svg";
 
 /** Result from rendering a diagram */
 export interface RenderResult {
-  json: object;
+  json: ExcalidrawFile;
   url?: string;
   filePath?: string;
   png?: Uint8Array;
