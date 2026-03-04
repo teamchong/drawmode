@@ -42,7 +42,7 @@ function getGraphviz() {
 }
 
 export async function layoutGraphGraphviz(
-  nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number }[],
+  nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number; type?: string }[],
   edges: { from: string; to: string; label?: string }[],
   groups?: { id: string; label: string; children: string[] }[],
 ): Promise<GraphvizLayoutResult | null> {
@@ -67,7 +67,7 @@ export async function layoutGraphGraphviz(
 }
 
 function generateDot(
-  nodes: { id: string; width: number; height: number; row?: number; col?: number }[],
+  nodes: { id: string; width: number; height: number; row?: number; col?: number; type?: string }[],
   edges: { from: string; to: string; label?: string }[],
   groups?: { id: string; label: string; children: string[] }[],
 ): string {
@@ -93,7 +93,8 @@ function generateDot(
       for (const childId of group.children) {
         const node = nodeById.get(childId);
         if (node) {
-          lines.push(`    "${escapeDot(node.id)}" [width=${(node.width / 72).toFixed(4)} height=${(node.height / 72).toFixed(4)}];`);
+          const gvShape = node.type === "diamond" ? " shape=diamond" : "";
+          lines.push(`    "${escapeDot(node.id)}" [width=${(node.width / 72).toFixed(4)} height=${(node.height / 72).toFixed(4)}${gvShape}];`);
           groupedNodeIds.add(node.id);
         }
       }
@@ -104,7 +105,8 @@ function generateDot(
   // Non-grouped nodes
   for (const node of nodes) {
     if (groupedNodeIds.has(node.id)) continue;
-    lines.push(`  "${escapeDot(node.id)}" [width=${(node.width / 72).toFixed(4)} height=${(node.height / 72).toFixed(4)}];`);
+    const gvShape = node.type === "diamond" ? " shape=diamond" : "";
+    lines.push(`  "${escapeDot(node.id)}" [width=${(node.width / 72).toFixed(4)} height=${(node.height / 72).toFixed(4)}${gvShape}];`);
   }
 
   // Rank constraints: nodes with same row value share a rank

@@ -452,4 +452,210 @@ describe("Diagram SDK", () => {
     expect(shape.x).toBe(500);
     expect(shape.y).toBe(300);
   });
+
+  // ── addDiamond ──
+
+  it("addDiamond creates diamond shape + text pair", async () => {
+    const d = new Diagram();
+    const id = d.addDiamond("Decision?", { row: 0, col: 0 });
+    expect(id).toMatch(/^dia_/);
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+    expect(shape).toBeDefined();
+    expect(shape.type).toBe("diamond");
+
+    const text = elements.find(e => e.id === `${id}-text`) as Record<string, unknown>;
+    expect(text).toBeDefined();
+    expect(text.text).toBe("Decision?");
+    expect(text.containerId).toBe(id);
+  });
+
+  it("addDiamond can connect with arrows", async () => {
+    const d = new Diagram();
+    const start = d.addBox("Start", { row: 0, col: 0 });
+    const decision = d.addDiamond("OK?", { row: 1, col: 0 });
+    const end = d.addBox("End", { row: 2, col: 0 });
+    d.connect(start, decision, "check");
+    d.connect(decision, end, "yes");
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    const arrows = elements.filter(e => e.type === "arrow");
+    expect(arrows.length).toBe(2);
+  });
+
+  // ── updateEdge ──
+
+  it("updateEdge changes label and style", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 1, col: 0 });
+    d.connect(a, b, "old label");
+
+    d.updateEdge(a, b, { label: "new label", style: "dashed" });
+
+    const edges = d.getEdges();
+    expect(edges[0].label).toBe("new label");
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
+    expect(arrow.strokeStyle).toBe("dashed");
+  });
+
+  it("updateEdge with matchLabel disambiguates multi-edges", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 1, col: 0 });
+    d.connect(a, b, "reads");
+    d.connect(a, b, "writes");
+
+    d.updateEdge(a, b, { label: "WRITES" }, "writes");
+
+    const edges = d.getEdges();
+    expect(edges[0].label).toBe("reads");
+    expect(edges[1].label).toBe("WRITES");
+  });
+
+  it("updateEdge throws on missing edge", () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 1, col: 0 });
+
+    expect(() => d.updateEdge(a, b, { label: "x" })).toThrow("Edge not found");
+  });
+
+  // ── removeEdge with label ──
+
+  it("removeEdge with label removes specific edge from multi-edges", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 1, col: 0 });
+    d.connect(a, b, "reads");
+    d.connect(a, b, "writes");
+    d.connect(a, b, "deletes");
+
+    d.removeEdge(a, b, "writes");
+
+    const edges = d.getEdges();
+    expect(edges.length).toBe(2);
+    expect(edges[0].label).toBe("reads");
+    expect(edges[1].label).toBe("deletes");
+  });
+
+  it("removeEdge without label removes first match only", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 1, col: 0 });
+    d.connect(a, b, "first");
+    d.connect(a, b, "second");
+
+    d.removeEdge(a, b);
+
+    const edges = d.getEdges();
+    expect(edges.length).toBe(1);
+    expect(edges[0].label).toBe("second");
+  });
+
+  // ── findByLabel exact ──
+
+  it("findByLabel with exact option", () => {
+    const d = new Diagram();
+    d.addBox("API Gateway", { row: 0, col: 0 });
+    d.addBox("API", { row: 0, col: 1 });
+    d.addBox("Database", { row: 1, col: 0 });
+
+    // Substring (default) matches both
+    const subResults = d.findByLabel("API");
+    expect(subResults.length).toBe(2);
+
+    // Exact match only matches "API"
+    const exactResults = d.findByLabel("API", { exact: true });
+    expect(exactResults.length).toBe(1);
+
+    // Case-insensitive exact
+    const caseResults = d.findByLabel("api", { exact: true });
+    expect(caseResults.length).toBe(1);
+  });
+
+  // ── link and customData ──
+
+  it("link property is wired through to shape element", async () => {
+    const d = new Diagram();
+    const id = d.addBox("Click me", { row: 0, col: 0, link: "https://example.com" });
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+
+    expect(shape.link).toBe("https://example.com");
+  });
+
+  it("customData property is wired through to shape element", async () => {
+    const d = new Diagram();
+    const id = d.addBox("Meta", { row: 0, col: 0, customData: { service: "api", tier: 1 } });
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+
+    expect(shape.customData).toEqual({ service: "api", tier: 1 });
+  });
+
+  it("customData on arrow is wired through", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 1, col: 0 });
+    d.connect(a, b, "flow", { customData: { protocol: "grpc" } });
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const arrow = elements.find(e => e.type === "arrow") as Record<string, unknown>;
+
+    expect(arrow.customData).toEqual({ protocol: "grpc" });
+  });
+
+  it("no customData key when not specified", async () => {
+    const d = new Diagram();
+    const id = d.addBox("Plain", { row: 0, col: 0 });
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+    const shape = elements.find(e => e.id === id) as Record<string, unknown>;
+
+    expect("customData" in shape).toBe(false);
+  });
+
+  // ── addFrame ──
+
+  it("addFrame creates frame element with children", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 0, col: 1 });
+    const frm = d.addFrame("My Frame", [a, b]);
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    // Frame element exists
+    const frame = elements.find(e => e.id === frm) as Record<string, unknown>;
+    expect(frame).toBeDefined();
+    expect(frame.type).toBe("frame");
+    expect(frame.name).toBe("My Frame");
+
+    // Children have frameId set
+    const shapeA = elements.find(e => e.id === a) as Record<string, unknown>;
+    expect(shapeA.frameId).toBe(frm);
+
+    const shapeB = elements.find(e => e.id === b) as Record<string, unknown>;
+    expect(shapeB.frameId).toBe(frm);
+
+    // Bound text elements also get frameId
+    const textA = elements.find(e => e.id === `${a}-text`) as Record<string, unknown>;
+    expect(textA.frameId).toBe(frm);
+  });
 });

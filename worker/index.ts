@@ -44,6 +44,8 @@ interface ShapeOpts {
   fontFamily?: FontFamily;
   textAlign?: TextAlign;
   verticalAlign?: VerticalAlign;
+  link?: string | null;
+  customData?: Record<string, unknown> | null;
 }
 
 interface ConnectOpts {
@@ -56,21 +58,25 @@ interface ConnectOpts {
   endArrowhead?: Arrowhead;
   elbowed?: boolean;
   labelFontSize?: number;
+  customData?: Record<string, unknown> | null;
 }
 
 declare class Diagram {
   addBox(label: string, opts?: ShapeOpts): string;
   addEllipse(label: string, opts?: ShapeOpts): string;
+  addDiamond(label: string, opts?: ShapeOpts): string;
   addText(text: string, opts?: { x?: number; y?: number; fontSize?: number; fontFamily?: FontFamily; color?: ColorPreset; strokeColor?: string }): string;
   addLine(points: [number, number][], opts?: { strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle }): string;
   addGroup(label: string, children: string[]): string;
+  addFrame(name: string, children: string[]): string;
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
-  findByLabel(label: string): string[];
+  findByLabel(label: string, opts?: { exact?: boolean }): string[];
   getNodes(): string[];
   getEdges(): Array<{ from: string; to: string; label?: string }>;
   updateNode(id: string, opts: Partial<ShapeOpts> & { label?: string }): void;
+  updateEdge(from: string, to: string, update: Partial<ConnectOpts> & { label?: string }, matchLabel?: string): void;
   removeNode(id: string): void;
-  removeEdge(from: string, to: string): void;
+  removeEdge(from: string, to: string, label?: string): void;
   render(opts?: { format?: "url" }): Promise<{ json: object; url?: string }>;
 }
 `;

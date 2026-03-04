@@ -51,6 +51,8 @@ interface ShapeOpts {
   fontFamily?: FontFamily;               // default 1
   textAlign?: TextAlign;
   verticalAlign?: VerticalAlign;
+  link?: string | null;                  // hyperlink URL
+  customData?: Record<string, unknown> | null; // arbitrary metadata
 }
 
 interface ConnectOpts {
@@ -63,6 +65,7 @@ interface ConnectOpts {
   endArrowhead?: Arrowhead;              // default "arrow"
   elbowed?: boolean;                     // default true
   labelFontSize?: number;
+  customData?: Record<string, unknown> | null; // arbitrary metadata
 }
 
 declare class Diagram {
@@ -71,6 +74,9 @@ declare class Diagram {
 
   /** Add an ellipse. Returns element ID. */
   addEllipse(label: string, opts?: ShapeOpts): string;
+
+  /** Add a diamond shape (for flowchart decisions). Returns element ID. */
+  addDiamond(label: string, opts?: ShapeOpts): string;
 
   /** Add standalone text (no container). Returns element ID. */
   addText(text: string, opts?: {
@@ -87,14 +93,17 @@ declare class Diagram {
   /** Group elements with a dashed boundary. Returns group ID. */
   addGroup(label: string, children: string[]): string;
 
+  /** Add a native Excalidraw frame container. Returns frame ID. */
+  addFrame(name: string, children: string[]): string;
+
   /** Connect two elements with an arrow. */
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
 
   /** Load existing .excalidraw file for editing. */
   static fromFile(path: string): Promise<Diagram>;
 
-  /** Find node IDs by label substring match. */
-  findByLabel(label: string): string[];
+  /** Find node IDs by label match. Substring by default, exact with opts. */
+  findByLabel(label: string, opts?: { exact?: boolean }): string[];
 
   /** Get all node IDs. */
   getNodes(): string[];
@@ -105,11 +114,14 @@ declare class Diagram {
   /** Update a node's properties. */
   updateNode(id: string, opts: Partial<ShapeOpts> & { label?: string }): void;
 
+  /** Update an existing edge's properties. Optional matchLabel disambiguates multi-edges. */
+  updateEdge(from: string, to: string, update: Partial<ConnectOpts> & { label?: string }, matchLabel?: string): void;
+
   /** Remove a node and its connected edges. */
   removeNode(id: string): void;
 
-  /** Remove an edge between two nodes. */
-  removeEdge(from: string, to: string): void;
+  /** Remove an edge between two nodes. Optional label disambiguates multi-edges. */
+  removeEdge(from: string, to: string, label?: string): void;
 
   /** Render the diagram. Always return this from your code. */
   render(opts?: {

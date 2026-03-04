@@ -97,6 +97,10 @@ export interface ShapeOpts {
   fontFamily?: FontFamily;
   textAlign?: TextAlign;
   verticalAlign?: VerticalAlign;
+  /** Hyperlink URL attached to the element */
+  link?: string | null;
+  /** Arbitrary custom metadata stored on the element */
+  customData?: Record<string, unknown> | null;
 }
 
 /** Options for connecting two elements */
@@ -112,6 +116,8 @@ export interface ConnectOpts {
   /** Whether to use elbow routing (default true) */
   elbowed?: boolean;
   labelFontSize?: number;
+  /** Arbitrary custom metadata stored on the arrow element */
+  customData?: Record<string, unknown> | null;
 }
 
 /** Output format options */
@@ -138,7 +144,7 @@ export interface RenderOpts {
 export interface GraphNode {
   id: string;
   label: string;
-  type: "rectangle" | "ellipse" | "text" | "line";
+  type: "rectangle" | "ellipse" | "diamond" | "text" | "line";
   row?: number;
   col?: number;
   width: number;

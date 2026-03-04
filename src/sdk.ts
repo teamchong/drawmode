@@ -41,6 +41,7 @@ export class Diagram {
   private nodes = new Map<string, GraphNode>();
   private edges: GraphEdge[] = [];
   private groups = new Map<string, { label: string; children: string[] }>();
+  private frames = new Map<string, { name: string; children: string[] }>();
   /** Passthrough elements from fromFile() — re-emitted unchanged */
   private passthrough: object[] = [];
   private idCounter = 0;
@@ -57,6 +58,11 @@ export class Diagram {
   /** Add an ellipse to the diagram. Returns the element ID. */
   addEllipse(label: string, opts?: ShapeOpts): string {
     return this.addShape("ell", "ellipse", label, opts, "users");
+  }
+
+  /** Add a diamond to the diagram. Returns the element ID. */
+  addDiamond(label: string, opts?: ShapeOpts): string {
+    return this.addShape("dia", "diamond", label, opts, "orchestration");
   }
 
   private addShape(prefix: string, type: GraphNode["type"], label: string, opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): string {
@@ -134,6 +140,13 @@ export class Diagram {
     return id;
   }
 
+  /** Add a native Excalidraw frame container. Returns the frame ID. */
+  addFrame(name: string, children: string[]): string {
+    const id = this.nextId("frm");
+    this.frames.set(id, { name, children });
+    return id;
+  }
+
   /** Connect two elements with an arrow. */
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void {
     this.edges.push({
@@ -179,14 +192,14 @@ export class Diagram {
       const elType = el.type as string;
       const elId = el.id as string;
 
-      if (elType === "rectangle" || elType === "ellipse") {
+      if (elType === "rectangle" || elType === "ellipse" || elType === "diamond") {
         // Detect group boundaries: must have companion "-label" text, dashed stroke,
         // transparent background, and low opacity. The "-label" check distinguishes
         // drawmode groups from user shapes that happen to be dashed + low opacity.
         const labelEl = elements.find(
           e => e.type === "text" && e.id === `${elId}-label`,
         );
-        if (labelEl && el.strokeStyle === "dashed" &&
+        if (elType !== "diamond" && labelEl && el.strokeStyle === "dashed" &&
             el.backgroundColor === "transparent" && (el.opacity as number) <= 50) {
           d.groups.set(elId, {
             label: (labelEl?.text as string) ?? "",
@@ -202,7 +215,7 @@ export class Diagram {
         const node: GraphNode = {
           id: elId,
           label,
-          type: elType,
+          type: elType as GraphNode["type"],
           width: el.width as number,
           height: el.height as number,
           color: {
@@ -222,6 +235,8 @@ export class Diagram {
             fontFamily: boundText?.fontFamily as FontFamily | undefined,
             textAlign: boundText?.textAlign as TextAlign | undefined,
             verticalAlign: boundText?.verticalAlign as VerticalAlign | undefined,
+            link: el.link as string | null | undefined,
+            ...(el.customData !== undefined ? { customData: el.customData as Record<string, unknown> } : {}),
           },
           absX: el.x as number,
           absY: el.y as number,
@@ -293,14 +308,15 @@ export class Diagram {
     return d;
   }
 
-  /** Find node IDs by label substring match. */
-  findByLabel(label: string): string[] {
+  /** Find node IDs by label match. Substring by default, exact with opts. */
+  findByLabel(label: string, opts?: { exact?: boolean }): string[] {
     const lower = label.toLowerCase();
     const results: string[] = [];
     for (const node of this.nodes.values()) {
-      if (node.label.toLowerCase().includes(lower)) {
-        results.push(node.id);
-      }
+      const match = opts?.exact
+        ? node.label.toLowerCase() === lower
+        : node.label.toLowerCase().includes(lower);
+      if (match) results.push(node.id);
     }
     return results;
   }
@@ -352,9 +368,28 @@ export class Diagram {
     }
   }
 
-  /** Remove an edge between two nodes. */
-  removeEdge(from: string, to: string): void {
-    this.edges = this.edges.filter(e => !(e.from === from && e.to === to));
+  /** Remove an edge between two nodes. Optional label disambiguates multi-edges. */
+  removeEdge(from: string, to: string, label?: string): void {
+    let removed = false;
+    this.edges = this.edges.filter(e => {
+      if (e.from !== from || e.to !== to) return true;
+      if (label !== undefined && e.label !== label) return true;
+      if (removed) return true; // only remove first match
+      removed = true;
+      return false;
+    });
+  }
+
+  /** Update an existing edge's properties. Optional matchLabel disambiguates multi-edges. */
+  updateEdge(from: string, to: string, update: Partial<ConnectOpts> & { label?: string }, matchLabel?: string): void {
+    const edge = this.edges.find(e =>
+      e.from === from && e.to === to &&
+      (matchLabel === undefined || e.label === matchLabel),
+    );
+    if (!edge) throw new Error(`Edge not found: ${from} -> ${to}`);
+    if (update.label !== undefined) edge.label = update.label;
+    if (update.style !== undefined) edge.style = update.style;
+    edge.opts = { ...edge.opts, ...update };
   }
 
   /** Render the diagram to the specified format. */
@@ -556,10 +591,11 @@ export class Diagram {
         isDeleted: false,
         updated: Date.now(),
         locked: false,
-        link: null,
+        link: o?.link ?? null,
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
+        ...(o?.customData !== undefined ? { customData: o.customData } : {}),
       });
 
       const textWidth = node.width - 20;
@@ -724,6 +760,7 @@ export class Diagram {
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
+        ...(co?.customData !== undefined ? { customData: co.customData } : {}),
       });
 
       // Arrow label placement
@@ -869,6 +906,66 @@ export class Diagram {
       });
     }
 
+    // Frames: native Excalidraw frame containers
+    for (const [frameId, frame] of this.frames) {
+      const childNodes = frame.children
+        .map(c => positioned.get(c))
+        .filter((n): n is PositionedNode => n !== undefined);
+      if (childNodes.length === 0) continue;
+
+      const padding = 30;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of childNodes) {
+        if (n.x! < minX) minX = n.x!;
+        if (n.y! < minY) minY = n.y!;
+        if (n.x! + n.width > maxX) maxX = n.x! + n.width;
+        if (n.y! + n.height > maxY) maxY = n.y! + n.height;
+      }
+      minX -= padding;
+      minY -= padding + 20;
+      maxX += padding;
+      maxY += padding;
+
+      elements.push({
+        id: frameId,
+        type: "frame",
+        x: minX, y: minY,
+        width: maxX - minX, height: maxY - minY,
+        name: frame.name,
+        backgroundColor: "transparent",
+        strokeColor: "#bbb",
+        fillStyle: "solid",
+        strokeWidth: 1,
+        strokeStyle: "solid",
+        roughness: 0,
+        opacity: 100,
+        angle: 0,
+        roundness: null,
+        boundElements: null,
+        groupIds: [],
+        frameId: null,
+        isDeleted: false,
+        updated: Date.now(),
+        locked: false,
+        link: null,
+        seed: randSeed(),
+        version: 1,
+        versionNonce: randSeed(),
+      });
+
+      // Set frameId on child elements
+      for (const el of elements) {
+        const elObj = el as Record<string, unknown>;
+        if (frame.children.includes(elObj.id as string)) {
+          elObj.frameId = frameId;
+        }
+        // Also tag bound text elements
+        if (elObj.containerId && frame.children.includes(elObj.containerId as string)) {
+          elObj.frameId = frameId;
+        }
+      }
+    }
+
     // Append passthrough elements
     elements.push(...this.passthrough);
 
@@ -893,13 +990,14 @@ export class Diagram {
 
   private async layoutNodesGraphviz(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, GraphvizEdgeRoute> } | null> {
     const graphNodes = Array.from(this.nodes.values()).filter(
-      n => n.type === "rectangle" || n.type === "ellipse",
+      n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond",
     );
     if (graphNodes.length === 0) return null;
 
     const gvNodes = graphNodes.map(n => ({
       id: n.id, width: n.width, height: n.height,
       row: n.row, col: n.col, absX: n.absX, absY: n.absY,
+      type: n.type,
     }));
     const gvEdges = this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
     const gvGroups = Array.from(this.groups.entries()).map(([id, g]) => ({
