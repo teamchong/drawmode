@@ -13,19 +13,65 @@ import { Diagram } from "../src/sdk.js";
 import type { RenderOpts, RenderResult } from "../src/types.js";
 
 const SDK_TYPES = `
+type FillStyle = "solid" | "hachure" | "cross-hatch";
+type StrokeStyle = "solid" | "dashed" | "dotted";
+type FontFamily = 1 | 2 | 3;  // Virgil / Helvetica / Cascadia
+type Arrowhead = null | "arrow" | "bar" | "dot" | "triangle";
+type TextAlign = "left" | "center" | "right";
+type VerticalAlign = "top" | "middle";
+
+type ColorPreset =
+  | "frontend" | "backend" | "database" | "storage" | "ai" | "external" | "orchestration" | "queue" | "cache" | "users"
+  | "aws-compute" | "aws-storage" | "aws-database" | "aws-network" | "aws-security" | "aws-ml"
+  | "azure-compute" | "azure-data" | "azure-network" | "azure-ai"
+  | "gcp-compute" | "gcp-data" | "gcp-network" | "gcp-ai"
+  | "k8s-pod" | "k8s-service" | "k8s-ingress" | "k8s-volume";
+
+interface ShapeOpts {
+  row?: number; col?: number;
+  color?: ColorPreset;
+  width?: number; height?: number;
+  x?: number; y?: number;
+  strokeColor?: string;
+  backgroundColor?: string;
+  fillStyle?: FillStyle;
+  strokeWidth?: number;
+  strokeStyle?: StrokeStyle;
+  roughness?: number;
+  opacity?: number;
+  roundness?: { type: number } | null;
+  fontSize?: number;
+  fontFamily?: FontFamily;
+  textAlign?: TextAlign;
+  verticalAlign?: VerticalAlign;
+}
+
+interface ConnectOpts {
+  style?: StrokeStyle;
+  strokeColor?: string;
+  strokeWidth?: number;
+  roughness?: number;
+  opacity?: number;
+  startArrowhead?: Arrowhead;
+  endArrowhead?: Arrowhead;
+  elbowed?: boolean;
+  labelFontSize?: number;
+}
+
 declare class Diagram {
-  addBox(label: string, opts?: {
-    row?: number; col?: number;
-    color?: "frontend" | "backend" | "database" | "storage" | "ai" | "external" | "orchestration" | "queue" | "cache" | "users";
-    width?: number; height?: number;
-  }): string;
-  addEllipse(label: string, opts?: {
-    row?: number; col?: number;
-    color?: "frontend" | "backend" | "database" | "storage" | "ai" | "external" | "orchestration" | "queue" | "cache" | "users";
-  }): string;
+  addBox(label: string, opts?: ShapeOpts): string;
+  addEllipse(label: string, opts?: ShapeOpts): string;
+  addText(text: string, opts?: { x?: number; y?: number; fontSize?: number; fontFamily?: FontFamily; color?: ColorPreset; strokeColor?: string }): string;
+  addLine(points: [number, number][], opts?: { strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle }): string;
   addGroup(label: string, children: string[]): string;
-  connect(from: string, to: string, label?: string, opts?: { style?: "solid" | "dashed" }): void;
-  render(opts?: { format?: "excalidraw" | "url"; path?: string }): Promise<{ json: object; url?: string; filePath?: string }>;
+  connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
+  findByLabel(label: string): string[];
+  getNodes(): string[];
+  getEdges(): Array<{ from: string; to: string; label?: string }>;
+  updateNode(id: string, opts: Partial<ShapeOpts> & { label?: string }): void;
+  removeNode(id: string): void;
+  removeEdge(from: string, to: string): void;
+  render(opts?: { format?: "url" }): Promise<{ json: object; url?: string }>;
 }
 `;
 

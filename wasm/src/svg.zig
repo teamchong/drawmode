@@ -70,7 +70,9 @@ pub fn renderSvg(elements_json: []const u8, out: []u8) !usize {
                 written += writeInt(out[written..], e.w);
                 written += copySlice(out[written..], "\" height=\"");
                 written += writeInt(out[written..], e.h);
-                written += copySlice(out[written..], "\" fill=\"none\" stroke=\"#868e96\" stroke-dasharray=\"5,5\" rx=\"8\" opacity=\"0.4\"/>\n");
+                written += copySlice(out[written..], "\" fill=\"none\" stroke=\"#868e96\" stroke-width=\"");
+                written += writeInt(out[written..], e.stroke_width);
+                written += copySlice(out[written..], "\" stroke-dasharray=\"5,5\" rx=\"8\" opacity=\"0.4\"/>\n");
             } else {
                 written += copySlice(out[written..], "<rect x=\"");
                 written += writeInt(out[written..], e.x);
@@ -125,7 +127,7 @@ pub fn renderSvg(elements_json: []const u8, out: []u8) !usize {
                 written += copySlice(out[written..], "\" text-anchor=\"middle\" dominant-baseline=\"central\" font-family=\"sans-serif\" font-size=\"");
                 written += writeInt(out[written..], e.font_size);
                 written += copySlice(out[written..], "\" fill=\"");
-                written += copySlice(out[written..], e.stroke);
+                written += writeXmlEscaped(out[written..], e.stroke);
                 written += copySlice(out[written..], "\">");
                 written += writeXmlEscaped(out[written..], e.text_content);
                 written += copySlice(out[written..], "</text>\n");
@@ -137,7 +139,7 @@ pub fn renderSvg(elements_json: []const u8, out: []u8) !usize {
                 written += copySlice(out[written..], "<text text-anchor=\"middle\" dominant-baseline=\"central\" font-family=\"sans-serif\" font-size=\"");
                 written += writeInt(out[written..], e.font_size);
                 written += copySlice(out[written..], "\" fill=\"");
-                written += copySlice(out[written..], e.stroke);
+                written += writeXmlEscaped(out[written..], e.stroke);
                 written += copySlice(out[written..], "\">");
 
                 // Split on \n (literal JSON escape) and write tspan elements
