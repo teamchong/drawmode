@@ -11,7 +11,7 @@
  */
 
 import { z } from "zod";
-import { deflateRawSync } from "node:zlib";
+import { zlibCompress } from "./layout.js";
 
 const EXCALIDRAW_API = "https://json.excalidraw.com/api/v2/post/";
 const IV_LENGTH_BYTES = 12;
@@ -61,13 +61,21 @@ export async function uploadToExcalidraw(jsonString: string): Promise<string> {
   const dataBuffer = new TextEncoder().encode(jsonString);
   const innerConcat = concatBuffers(contentsMetadata, dataBuffer);
 
-  // 3. deflate (raw, no zlib wrapper) → encrypt
-  const compressed = deflateRawSync(innerConcat);
+  // 3. zlib compress (matching pako.deflate) → encrypt
+  const wasmCompressed = zlibCompress(innerConcat);
+  let compressed: Uint8Array;
+  if (wasmCompressed) {
+    compressed = wasmCompressed;
+  } else {
+    // Fallback to Node.js zlib if WASM not loaded
+    const { deflateSync } = await import("node:zlib");
+    compressed = deflateSync(innerConcat);
+  }
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
   const encryptedBuffer = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     cryptoKey,
-    compressed,
+    new Uint8Array(compressed.buffer as ArrayBuffer, compressed.byteOffset, compressed.byteLength),
   );
 
   // 4. Build outer payload: concatBuffers(encodingMetadata, iv, encryptedData)

@@ -388,6 +388,91 @@ describe("e2e: MCP draw tool", () => {
     expect((context.elements as unknown[]).length).toBe(2);
   });
 
+  it("excalidraw upload roundtrip — decrypt and decompress", async () => {
+    // Generate a diagram and upload
+    const result = await client.callTool({
+      name: "draw",
+      arguments: {
+        code: `
+          const d = new Diagram();
+          d.addBox("Upload Test", { row: 0, col: 0, color: "backend" });
+          return d.render({ format: "url" });
+        `,
+        format: "url",
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const parts = result.content as Array<{ type: string; text: string }>;
+    const urlPart = parts.find(p => p.text.includes("excalidraw.com/#json="));
+    expect(urlPart).toBeDefined();
+
+    // Parse ID and key from URL
+    const match = urlPart!.text.match(/excalidraw\.com\/#json=([^,]+),(\S+)/);
+    expect(match).toBeTruthy();
+    const [, id, encryptionKey] = match!;
+
+    // Fetch the encrypted payload
+    const resp = await fetch(`https://json.excalidraw.com/api/v2/${id}`);
+    expect(resp.ok).toBe(true);
+    const payload = new Uint8Array(await resp.arrayBuffer());
+
+    // Parse concatBuffers format: [version(4B)] [size(4B) + data]...
+    const view = new DataView(payload.buffer);
+    let cursor = 0;
+    const version = view.getUint32(cursor); cursor += 4;
+    expect(version).toBe(1);
+
+    // Read encoding metadata
+    const metaSize = view.getUint32(cursor); cursor += 4;
+    const metaBytes = payload.slice(cursor, cursor + metaSize);
+    cursor += metaSize;
+    const meta = JSON.parse(new TextDecoder().decode(metaBytes));
+    expect(meta.encryption).toBe("AES-GCM");
+
+    // Read IV
+    const ivSize = view.getUint32(cursor); cursor += 4;
+    const iv = payload.slice(cursor, cursor + ivSize);
+    cursor += ivSize;
+    expect(iv.length).toBe(12);
+
+    // Read encrypted data
+    const encSize = view.getUint32(cursor); cursor += 4;
+    const encrypted = payload.slice(cursor, cursor + encSize);
+
+    // Import key and decrypt
+    const cryptoKey = await crypto.subtle.importKey(
+      "jwk",
+      { alg: "A128GCM", ext: true, k: encryptionKey, key_ops: ["encrypt", "decrypt"], kty: "oct" },
+      { name: "AES-GCM", length: 128 },
+      false,
+      ["decrypt"],
+    );
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, encrypted);
+
+    // Decompress (zlib format)
+    const { inflateSync } = await import("node:zlib");
+    const decompressed = inflateSync(Buffer.from(decrypted));
+
+    // Parse inner concatBuffers: [version(4B)] [size(4B) + contentsMetadata] [size(4B) + data]
+    const innerView = new DataView(decompressed.buffer, decompressed.byteOffset);
+    let innerCursor = 0;
+    const innerVersion = innerView.getUint32(innerCursor); innerCursor += 4;
+    expect(innerVersion).toBe(1);
+
+    // Skip contents metadata
+    const contentMetaSize = innerView.getUint32(innerCursor); innerCursor += 4;
+    innerCursor += contentMetaSize;
+
+    // Read actual data
+    const dataSize = innerView.getUint32(innerCursor); innerCursor += 4;
+    const data = new TextDecoder().decode(decompressed.slice(innerCursor, innerCursor + dataSize));
+    const excalidraw = JSON.parse(data);
+
+    expect(excalidraw.type).toBe("excalidraw");
+    expect(excalidraw.elements.length).toBeGreaterThan(0);
+  });
+
   it("widget resource serves HTML", async () => {
     const { resources } = await client.listResources();
     const widget = resources.find(r => r.uri === "ui://widget");

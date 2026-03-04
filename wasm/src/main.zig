@@ -2,6 +2,7 @@ const std = @import("std");
 const layout = @import("layout.zig");
 const arrows = @import("arrows.zig");
 const validate_mod = @import("validate.zig");
+const compress_mod = @import("compress.zig");
 
 /// Bump allocator backed by a fixed buffer (no imports needed for WASM).
 /// 4MB heap for element data and layout scratch.
@@ -66,6 +67,19 @@ export fn validate(
     return validate_mod.validate(elem_slice, out_slice) catch 0;
 }
 
+
+/// Compress data using zlib format (matching pako.deflate).
+export fn zlibCompress(
+    in_ptr: [*]const u8,
+    in_len: usize,
+    out_ptr: [*]u8,
+    out_cap: usize,
+) usize {
+    const in_slice = in_ptr[0..in_len];
+    const out_slice = out_ptr[0..out_cap];
+
+    return compress_mod.zlibCompress(in_slice, out_slice) catch 0;
+}
 
 test "alloc and reset" {
     resetHeap();

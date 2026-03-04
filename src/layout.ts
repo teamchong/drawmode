@@ -40,6 +40,7 @@ interface WasmLayoutExports {
   resetHeap: () => void;
   layoutGraph: (nodesPtr: number, nodesLen: number, edgesPtr: number, edgesLen: number, outPtr: number, outCap: number) => number;
   validate: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
+  zlibCompress: (inPtr: number, inLen: number, outPtr: number, outCap: number) => number;
 }
 
 let wasmInstance: WasmLayoutExports | null = null;
@@ -179,5 +180,16 @@ export async function layoutGraphWasm(
 export function validateElements(elementsJson: string): string | null {
   if (!wasmInstance) return null;
   return callWasm(wasmInstance.validate.bind(wasmInstance), elementsJson, 16 * 1024);
+}
+
+/** Compress data using zlib format (matching pako.deflate). Returns compressed bytes or null. */
+export function zlibCompress(data: Uint8Array): Uint8Array | null {
+  if (!wasmInstance) return null;
+  wasmInstance.resetHeap();
+  const inPtr = writeToWasm(data);
+  const outCap = data.byteLength + 1024; // compressed + zlib overhead
+  const outPtr = wasmInstance.alloc(outCap);
+  const written = wasmInstance.zlibCompress(inPtr, data.byteLength, outPtr, outCap);
+  return written > 0 ? readFromWasm(outPtr, written) : null;
 }
 
