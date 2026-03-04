@@ -385,6 +385,63 @@ describe("Diagram SDK", () => {
     expect(json.elements.length).toBeGreaterThan(0);
   });
 
+  it("fromFile round-trip preserves frames", async () => {
+    // Create diagram with frame
+    const d1 = new Diagram();
+    const a = d1.addBox("API", { row: 0, col: 0, color: "backend" });
+    const b = d1.addBox("DB", { row: 1, col: 0, color: "database" });
+    d1.addFrame("Backend", [a, b]);
+    d1.connect(a, b, "queries");
+    await d1.render({ format: "excalidraw", path: testFile });
+
+    // Load and verify frame is reconstructed
+    const d2 = await Diagram.fromFile(testFile);
+    const nodes = d2.getNodes();
+    expect(nodes.length).toBe(2);
+
+    // Re-render and check frame survives
+    const result = await d2.render({ format: "excalidraw", path: testFile });
+    const els = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    const frame = els.find(e => e.type === "frame") as Record<string, unknown>;
+    expect(frame).toBeDefined();
+    expect(frame.name).toBe("Backend");
+
+    // Children should have frameId
+    const framed = els.filter(e => e.frameId === frame.id);
+    // Should have at least the 2 shapes + their bound text = 4
+    expect(framed.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("fromFile round-trip preserves link and customData", async () => {
+    const d1 = new Diagram();
+    d1.addBox("Linked", { row: 0, col: 0, link: "https://example.com", customData: { env: "prod" } });
+    await d1.render({ format: "excalidraw", path: testFile });
+
+    const d2 = await Diagram.fromFile(testFile);
+    const result = await d2.render({ format: "excalidraw", path: testFile });
+    const els = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    const shape = els.find(e => e.type === "rectangle") as Record<string, unknown>;
+    expect(shape.link).toBe("https://example.com");
+    expect(shape.customData).toEqual({ env: "prod" });
+  });
+
+  it("fromFile round-trip preserves diamond type", async () => {
+    const d1 = new Diagram();
+    d1.addDiamond("Yes?", { row: 0, col: 0 });
+    await d1.render({ format: "excalidraw", path: testFile });
+
+    const d2 = await Diagram.fromFile(testFile);
+    const result = await d2.render({ format: "excalidraw", path: testFile });
+    const els = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    const diamond = els.find(e => e.type === "diamond") as Record<string, unknown>;
+    expect(diamond).toBeDefined();
+    const text = els.find(e => (e as Record<string, unknown>).containerId === diamond.id) as Record<string, unknown>;
+    expect(text.text).toBe("Yes?");
+  });
+
   it("findByLabel matches substring", async () => {
     const d = new Diagram();
     d.addBox("API Gateway", { row: 0, col: 0 });
@@ -455,7 +512,7 @@ describe("Diagram SDK", () => {
 
   // ── addDiamond ──
 
-  it("addDiamond creates diamond shape + text pair", async () => {
+  it("addDiamond creates diamond shape + text pair with default backend color", async () => {
     const d = new Diagram();
     const id = d.addDiamond("Decision?", { row: 0, col: 0 });
     expect(id).toMatch(/^dia_/);
@@ -466,6 +523,9 @@ describe("Diagram SDK", () => {
     const shape = elements.find(e => e.id === id) as Record<string, unknown>;
     expect(shape).toBeDefined();
     expect(shape.type).toBe("diamond");
+    // Default color should be "backend" (purple), same as addBox
+    expect(shape.backgroundColor).toBe("#d0bfff");
+    expect(shape.strokeColor).toBe("#7048e8");
 
     const text = elements.find(e => e.id === `${id}-text`) as Record<string, unknown>;
     expect(text).toBeDefined();
@@ -628,6 +688,71 @@ describe("Diagram SDK", () => {
     const shape = elements.find(e => e.id === id) as Record<string, unknown>;
 
     expect("customData" in shape).toBe(false);
+  });
+
+  // ── addFrame ──
+
+  // ── removeGroup / removeFrame ──
+
+  it("removeGroup removes group container, keeps children", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 0, col: 1 });
+    const grp = d.addGroup("Data Layer", [a, b]);
+
+    d.removeGroup(grp);
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    // Group boundary should be gone
+    expect(elements.find(e => e.id === grp)).toBeUndefined();
+    expect(elements.find(e => e.id === `${grp}-label`)).toBeUndefined();
+    // Children still exist
+    expect(elements.find(e => e.id === a)).toBeDefined();
+    expect(elements.find(e => e.id === b)).toBeDefined();
+  });
+
+  it("removeFrame removes frame container, keeps children", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 0, col: 1 });
+    const frm = d.addFrame("My Frame", [a, b]);
+
+    d.removeFrame(frm);
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    // Frame element should be gone
+    expect(elements.find(e => e.id === frm)).toBeUndefined();
+    // Children should not have frameId
+    const shapeA = elements.find(e => e.id === a) as Record<string, unknown>;
+    expect(shapeA.frameId).toBeNull();
+    // Children still exist
+    expect(shapeA).toBeDefined();
+    expect(elements.find(e => e.id === b)).toBeDefined();
+  });
+
+  it("removeNode cleans up frame children", async () => {
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 0, col: 1 });
+    const frm = d.addFrame("My Frame", [a, b]);
+
+    d.removeNode(a);
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = (result.json as { elements: Record<string, unknown>[] }).elements;
+
+    // Frame should still exist with only B
+    const frame = elements.find(e => e.id === frm) as Record<string, unknown>;
+    expect(frame).toBeDefined();
+    // B should have frameId
+    const shapeB = elements.find(e => e.id === b) as Record<string, unknown>;
+    expect(shapeB.frameId).toBe(frm);
+    // A should be gone
+    expect(elements.find(e => e.id === a)).toBeUndefined();
   });
 
   // ── addFrame ──

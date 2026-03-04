@@ -60,9 +60,9 @@ export class Diagram {
     return this.addShape("ell", "ellipse", label, opts, "users");
   }
 
-  /** Add a diamond to the diagram. Returns the element ID. */
+  /** Add a diamond to the diagram (for flowchart decisions). Returns the element ID. */
   addDiamond(label: string, opts?: ShapeOpts): string {
-    return this.addShape("dia", "diamond", label, opts, "orchestration");
+    return this.addShape("dia", "diamond", label, opts);
   }
 
   private addShape(prefix: string, type: GraphNode["type"], label: string, opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): string {
@@ -145,6 +145,16 @@ export class Diagram {
     const id = this.nextId("frm");
     this.frames.set(id, { name, children });
     return id;
+  }
+
+  /** Remove a group container. Children are kept. */
+  removeGroup(id: string): void {
+    this.groups.delete(id);
+  }
+
+  /** Remove a frame container. Children are kept. */
+  removeFrame(id: string): void {
+    this.frames.delete(id);
   }
 
   /** Connect two elements with an arrow. */
@@ -283,6 +293,12 @@ export class Diagram {
           absX: el.x as number,
           absY: el.y as number,
         });
+      } else if (elType === "frame") {
+        // Native Excalidraw frame — reconstruct into frames map
+        d.frames.set(elId, {
+          name: (el.name as string) ?? "",
+          children: [], // Populated below using frameId references
+        });
       } else if (elType === "text" && el.containerId) {
         // Bound text — already handled via textByContainer, skip
       } else {
@@ -303,6 +319,18 @@ export class Diagram {
         }
       }
       delete (group as Record<string, unknown>)._bounds;
+    }
+
+    // Reconstruct frame children: nodes whose element had frameId set
+    for (const el of elements) {
+      const fid = el.frameId as string | null | undefined;
+      if (fid && d.frames.has(fid)) {
+        const elId = el.id as string;
+        // Only add shape nodes (not bound text elements) as frame children
+        if (d.nodes.has(elId)) {
+          d.frames.get(fid)!.children.push(elId);
+        }
+      }
     }
 
     return d;
@@ -362,9 +390,12 @@ export class Diagram {
   removeNode(id: string): void {
     this.nodes.delete(id);
     this.edges = this.edges.filter(e => e.from !== id && e.to !== id);
-    // Also remove from groups
+    // Also remove from groups and frames
     for (const group of this.groups.values()) {
       group.children = group.children.filter(c => c !== id);
+    }
+    for (const frame of this.frames.values()) {
+      frame.children = frame.children.filter(c => c !== id);
     }
   }
 

@@ -69,6 +69,8 @@ declare class Diagram {
   addLine(points: [number, number][], opts?: { strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle }): string;
   addGroup(label: string, children: string[]): string;
   addFrame(name: string, children: string[]): string;
+  removeGroup(id: string): void;
+  removeFrame(id: string): void;
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
   findByLabel(label: string, opts?: { exact?: boolean }): string[];
   getNodes(): string[];

@@ -96,6 +96,12 @@ declare class Diagram {
   /** Add a native Excalidraw frame container. Returns frame ID. */
   addFrame(name: string, children: string[]): string;
 
+  /** Remove a group container. Children are kept. */
+  removeGroup(id: string): void;
+
+  /** Remove a frame container. Children are kept. */
+  removeFrame(id: string): void;
+
   /** Connect two elements with an arrow. */
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
 
