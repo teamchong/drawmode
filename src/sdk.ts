@@ -12,7 +12,7 @@ import { COLOR_PALETTE } from "./types.js";
 import {
   layoutGraph, validateElements, isWasmLoaded,
   layoutGraphGraphviz,
-  type GraphvizEdgeRoute, type GraphvizLayoutResult,
+  type GraphvizEdgeRoute,
 } from "./layout.js";
 
 const DEFAULT_WIDTH = 180;
@@ -41,34 +41,23 @@ export class Diagram {
 
   /** Add a rectangle to the diagram. Returns the element ID. */
   addBox(label: string, opts?: ShapeOpts): string {
-    const id = nextId("box");
-    const color = resolveColor(opts);
-    const extraLines = (label.split("\n").length - 1);
-    this.nodes.set(id, {
-      id, label, type: "rectangle",
-      row: opts?.row, col: opts?.col,
-      width: opts?.width ?? DEFAULT_WIDTH,
-      height: opts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT),
-      color,
-      opts,
-      absX: opts?.x,
-      absY: opts?.y,
-    });
-    return id;
+    return this.addShape("box", "rectangle", label, opts);
   }
 
   /** Add an ellipse to the diagram. Returns the element ID. */
   addEllipse(label: string, opts?: ShapeOpts): string {
-    const id = nextId("ell");
-    const defaultPreset: ColorPreset = "users";
-    const color = resolveColor(opts, defaultPreset);
-    const extraLines = (label.split("\n").length - 1);
+    return this.addShape("ell", "ellipse", label, opts, "users");
+  }
+
+  private addShape(prefix: string, type: GraphNode["type"], label: string, opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): string {
+    const id = nextId(prefix);
+    const extraLines = label.split("\n").length - 1;
     this.nodes.set(id, {
-      id, label, type: "ellipse",
+      id, label, type,
       row: opts?.row, col: opts?.col,
       width: opts?.width ?? DEFAULT_WIDTH,
       height: opts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT),
-      color,
+      color: resolveColor(opts, defaultPreset),
       opts,
       absX: opts?.x,
       absY: opts?.y,
@@ -548,15 +537,16 @@ export class Diagram {
 
       const co = edge.opts;
       const arrowId = nextId("arr");
-      const outCount = edgeCounts.get(edge.from) ?? 1;
-      const outIdx = edgeIndexes.get(edge.from) ?? 0;
-      edgeIndexes.set(edge.from, outIdx + 1);
-
       const isElbowed = co?.elbowed !== false; // default true
 
       // Check for Graphviz-computed edge route
       const routeKey = `${edge.from}->${edge.to}`;
       const gvRoute = edgeRoutes?.get(routeKey);
+
+      // Only track stagger indexes for TS-routed edges
+      const outCount = edgeCounts.get(edge.from) ?? 1;
+      const outIdx = gvRoute ? 0 : (edgeIndexes.get(edge.from) ?? 0);
+      if (!gvRoute) edgeIndexes.set(edge.from, outIdx + 1);
 
       let arrowX: number, arrowY: number;
       let points: number[][];
@@ -577,41 +567,24 @@ export class Diagram {
         const dx = targetPoint.x - sourcePoint.x;
         const dy = targetPoint.y - sourcePoint.y;
 
-        if (isElbowed) {
-          if (sourceEdge === "bottom" && targetEdge === "top") {
-            if (Math.abs(dx) < 10) {
-              points = [[0, 0], [0, dy]];
-            } else {
-              const midY = Math.round(dy / 2);
-              points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
-            }
-          } else if (sourceEdge === "top" && targetEdge === "bottom") {
-            if (Math.abs(dx) < 10) {
-              points = [[0, 0], [0, dy]];
-            } else {
-              const midY = Math.round(dy / 2);
-              points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
-            }
-          } else if (sourceEdge === "right" && targetEdge === "left") {
-            if (Math.abs(dy) < 10) {
-              points = [[0, 0], [dx, 0]];
-            } else {
-              const midX = Math.round(dx / 2);
-              points = [[0, 0], [midX, 0], [midX, dy], [dx, dy]];
-            }
-          } else if (sourceEdge === "left" && targetEdge === "right") {
-            if (Math.abs(dy) < 10) {
-              points = [[0, 0], [dx, 0]];
-            } else {
-              const midX = Math.round(dx / 2);
-              points = [[0, 0], [midX, 0], [midX, dy], [dx, dy]];
-            }
+        if (!isElbowed) {
+          points = [[0, 0], [dx, dy]];
+        } else if (sourceEdge === "right" || sourceEdge === "left") {
+          // Horizontal source edge → route via midX
+          if (Math.abs(dy) < 10) {
+            points = [[0, 0], [dx, 0]];
+          } else {
+            const midX = Math.round(dx / 2);
+            points = [[0, 0], [midX, 0], [midX, dy], [dx, dy]];
+          }
+        } else {
+          // Vertical source edge (top/bottom) or default → route via midY
+          if (Math.abs(dx) < 10) {
+            points = [[0, 0], [0, dy]];
           } else {
             const midY = Math.round(dy / 2);
             points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
           }
-        } else {
-          points = [[0, 0], [dx, dy]];
         }
       }
 
@@ -800,7 +773,6 @@ export class Diagram {
   }
 
   private async layoutNodesGraphviz(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, GraphvizEdgeRoute> } | null> {
-    // Only layout graph-relevant nodes (rectangles, ellipses) via Graphviz
     const graphNodes = Array.from(this.nodes.values()).filter(
       n => n.type === "rectangle" || n.type === "ellipse",
     );
@@ -810,9 +782,7 @@ export class Diagram {
       id: n.id, width: n.width, height: n.height,
       row: n.row, col: n.col, absX: n.absX, absY: n.absY,
     }));
-    const gvEdges = this.edges.map(e => ({
-      from: e.from, to: e.to, label: e.label,
-    }));
+    const gvEdges = this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
     const gvGroups = Array.from(this.groups.entries()).map(([id, g]) => ({
       id, label: g.label, children: g.children,
     }));
@@ -820,26 +790,7 @@ export class Diagram {
     const result = await layoutGraphGraphviz(gvNodes, gvEdges, gvGroups.length > 0 ? gvGroups : undefined);
     if (!result) return null;
 
-    const positioned = new Map<string, PositionedNode>();
-
-    // Apply Graphviz positions (absX/absY overrides)
-    for (const pos of result.nodes) {
-      const node = this.nodes.get(pos.id);
-      if (node) {
-        const x = node.absX ?? pos.x;
-        const y = node.absY ?? pos.y;
-        positioned.set(pos.id, { ...node, x, y });
-      }
-    }
-
-    // Position non-graph nodes (text, lines) using absX/absY
-    for (const node of this.nodes.values()) {
-      if (!positioned.has(node.id)) {
-        positioned.set(node.id, { ...node, x: node.absX ?? BASE_X, y: node.absY ?? BASE_Y });
-      }
-    }
-
-    return { positioned, edgeRoutes: result.edgeRoutes };
+    return { positioned: this.applyPositions(result.nodes), edgeRoutes: result.edgeRoutes };
   }
 
   private layoutNodesWasm(): Map<string, PositionedNode> | null {
@@ -858,27 +809,27 @@ export class Diagram {
 
     try {
       const laid = JSON.parse(resultJson) as { id: string; x: number; y: number }[];
-      const result = new Map<string, PositionedNode>();
-
-      for (const pos of laid) {
-        const node = this.nodes.get(pos.id);
-        if (node) {
-          const x = node.absX ?? pos.x;
-          const y = node.absY ?? pos.y;
-          result.set(pos.id, { ...node, x, y });
-        }
-      }
-
-      for (const node of this.nodes.values()) {
-        if (!result.has(node.id)) {
-          result.set(node.id, { ...node, x: node.absX ?? BASE_X, y: node.absY ?? BASE_Y });
-        }
-      }
-
-      return result;
+      return this.applyPositions(laid);
     } catch {
       return null;
     }
+  }
+
+  /** Apply layout positions to nodes, with absX/absY overrides and fallback for unpositioned nodes. */
+  private applyPositions(positions: { id: string; x: number; y: number }[]): Map<string, PositionedNode> {
+    const result = new Map<string, PositionedNode>();
+    for (const pos of positions) {
+      const node = this.nodes.get(pos.id);
+      if (node) {
+        result.set(pos.id, { ...node, x: node.absX ?? pos.x, y: node.absY ?? pos.y });
+      }
+    }
+    for (const node of this.nodes.values()) {
+      if (!result.has(node.id)) {
+        result.set(node.id, { ...node, x: node.absX ?? BASE_X, y: node.absY ?? BASE_Y });
+      }
+    }
+    return result;
   }
 
   private layoutNodesGrid(): Map<string, PositionedNode> {

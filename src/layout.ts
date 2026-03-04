@@ -26,20 +26,15 @@ export interface GraphvizLayoutResult {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let graphvizInstance: any = null;
-let graphvizLoadAttempted = false;
+let graphvizPromise: Promise<any> | null = null;
 
-async function getGraphviz() {
-  if (graphvizInstance) return graphvizInstance;
-  if (graphvizLoadAttempted) return null;
-  graphvizLoadAttempted = true;
-  try {
-    const mod = await import("@hpcc-js/wasm-graphviz");
-    graphvizInstance = await mod.Graphviz.load();
-    return graphvizInstance;
-  } catch {
-    return null;
+function getGraphviz() {
+  if (!graphvizPromise) {
+    graphvizPromise = import("@hpcc-js/wasm-graphviz")
+      .then(mod => mod.Graphviz.load())
+      .catch(() => null);
   }
+  return graphvizPromise;
 }
 
 export async function layoutGraphGraphviz(
@@ -75,10 +70,13 @@ function generateDot(
   const lines: string[] = [];
   lines.push("digraph G {");
   lines.push("  rankdir=TB;");
+  lines.push("  newrank=true;");
   lines.push("  ranksep=1.5;");
   lines.push("  nodesep=1.0;");
   lines.push("  splines=ortho;");
   lines.push("  node [shape=box];");
+
+  const nodeById = new Map(nodes.map(n => [n.id, n]));
 
   // Cluster subgraphs for groups
   const groupedNodeIds = new Set<string>();
@@ -90,7 +88,7 @@ function generateDot(
       lines.push("    style=dashed;");
       lines.push('    color="#868e96";');
       for (const childId of group.children) {
-        const node = nodes.find(n => n.id === childId);
+        const node = nodeById.get(childId);
         if (node) {
           lines.push(`    "${escapeDot(node.id)}" [width=${(node.width / 72).toFixed(4)} height=${(node.height / 72).toFixed(4)}];`);
           groupedNodeIds.add(node.id);
@@ -169,34 +167,24 @@ function parseJson0Result(
 
     const key = `${fromId}->${toId}`;
 
-    // Extract path points from _draw_ B-spline operations
+    // Extract path points from _draw_ B-spline operations (deduped in one pass)
     const drawOps = edge._draw_ as { op: string; points?: [number, number][] }[] | undefined;
     if (!drawOps) continue;
 
-    const pathPoints: [number, number][] = [];
+    const deduped: [number, number][] = [];
+    const pushUnique = (x: number, y: number) => {
+      const prev = deduped[deduped.length - 1];
+      if (!prev || prev[0] !== x || prev[1] !== y) deduped.push([x, y]);
+    };
+
     for (const op of drawOps) {
       if ((op.op === "b" || op.op === "B") && op.points) {
-        // B-spline: extract waypoints (every 3rd point = actual path points)
         const pts = op.points;
         for (let i = 0; i < pts.length; i += 3) {
-          pathPoints.push([Math.round(pts[i][0]), Math.round(maxY - pts[i][1])]);
+          pushUnique(Math.round(pts[i][0]), Math.round(maxY - pts[i][1]));
         }
-        // Ensure last point is included
         const last = pts[pts.length - 1];
-        const lastConverted: [number, number] = [Math.round(last[0]), Math.round(maxY - last[1])];
-        const prev = pathPoints[pathPoints.length - 1];
-        if (!prev || prev[0] !== lastConverted[0] || prev[1] !== lastConverted[1]) {
-          pathPoints.push(lastConverted);
-        }
-      }
-    }
-
-    // Deduplicate consecutive identical points
-    const deduped: [number, number][] = [];
-    for (const pt of pathPoints) {
-      const prev = deduped[deduped.length - 1];
-      if (!prev || prev[0] !== pt[0] || prev[1] !== pt[1]) {
-        deduped.push(pt);
+        pushUnique(Math.round(last[0]), Math.round(maxY - last[1]));
       }
     }
 
