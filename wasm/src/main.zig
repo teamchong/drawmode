@@ -3,9 +3,12 @@ const layout = @import("layout.zig");
 const arrows = @import("arrows.zig");
 const validate_mod = @import("validate.zig");
 const svg_mod = @import("svg.zig");
+const png_mod = @import("png.zig");
 
 /// Bump allocator backed by a fixed buffer (no imports needed for WASM).
-var heap_buf: [1024 * 1024]u8 = undefined;
+/// 8MB heap: 2400×1600×4 = 15.36MB for pixel buffer (static in png.zig),
+/// plus headroom for element data, compression buffers, and layout scratch.
+var heap_buf: [8 * 1024 * 1024]u8 = undefined;
 var heap_offset: usize = 0;
 
 export fn alloc(size: usize) usize {
@@ -24,7 +27,7 @@ export fn resetHeap() void {
 }
 
 /// Auto-layout: position nodes in a layered graph layout.
-/// Input: nodes JSON + edges JSON. Output: positioned nodes JSON.
+/// Input: nodes JSON + edges JSON. Output: positioned nodes + edge routes JSON.
 export fn layoutGraph(
     nodes_ptr: [*]const u8,
     nodes_len: usize,
@@ -77,6 +80,19 @@ export fn renderSvg(
     const out_slice = out_ptr[0..out_cap];
 
     return svg_mod.renderSvg(elem_slice, out_slice) catch 0;
+}
+
+/// Render Excalidraw elements to PNG.
+export fn renderPng(
+    elem_ptr: [*]const u8,
+    elem_len: usize,
+    out_ptr: [*]u8,
+    out_cap: usize,
+) usize {
+    const elem_slice = elem_ptr[0..elem_len];
+    const out_slice = out_ptr[0..out_cap];
+
+    return png_mod.renderPng(elem_slice, out_slice) catch 0;
 }
 
 test "alloc and reset" {

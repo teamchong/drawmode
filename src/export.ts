@@ -2,10 +2,10 @@
  * Export Excalidraw elements to SVG and PNG.
  *
  * SVG: Uses WASM renderSvg when available, falls back to TS renderer.
- * PNG: Converts SVG to PNG via @resvg/resvg-js (pure WASM, no browser).
+ * PNG: Uses WASM renderPng directly (no external dependencies).
  */
 
-import { renderSvg as wasmRenderSvg, isWasmLoaded } from "./layout.js";
+import { renderSvg as wasmRenderSvg, renderPng as wasmRenderPng, isWasmLoaded } from "./layout.js";
 
 /** Export Excalidraw elements to SVG string. */
 export function exportToSvg(elements: object[]): string {
@@ -19,15 +19,12 @@ export function exportToSvg(elements: object[]): string {
   return renderSvgTs(elements);
 }
 
-/** Export Excalidraw elements to PNG bytes. */
-export async function exportToPng(elements: object[]): Promise<Uint8Array> {
-  const svg = exportToSvg(elements);
-  const { Resvg } = await import("@resvg/resvg-js");
-  const resvg = new Resvg(svg, {
-    fitTo: { mode: "width" as const, value: 1200 },
-  });
-  const rendered = resvg.render();
-  return rendered.asPng();
+/** Export Excalidraw elements to PNG bytes. Returns null if WASM is unavailable. */
+export async function exportToPng(elements: object[]): Promise<Uint8Array | null> {
+  if (!isWasmLoaded()) return null;
+
+  const result = wasmRenderPng(JSON.stringify(elements));
+  return result ?? null;
 }
 
 type Elem = Record<string, unknown>;

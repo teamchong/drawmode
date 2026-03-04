@@ -142,11 +142,7 @@ let cachedWidgetHtml: string | null = null;
 async function loadWidgetHtml(): Promise<string> {
   if (cachedWidgetHtml) return cachedWidgetHtml;
   const widgetPath = join(__dirname, "widget.html");
-  try {
-    cachedWidgetHtml = await readFile(widgetPath, "utf-8");
-  } catch {
-    cachedWidgetHtml = await readFile(join(__dirname, "..", "src", "widget.html"), "utf-8");
-  }
+  cachedWidgetHtml = await readFile(widgetPath, "utf-8");
   return cachedWidgetHtml;
 }
 

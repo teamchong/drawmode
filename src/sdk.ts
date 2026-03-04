@@ -10,9 +10,9 @@ import type {
 } from "./types.js";
 import { COLOR_PALETTE } from "./types.js";
 import {
-  layoutGraph, validateElements, isWasmLoaded,
-  layoutGraphGraphviz,
-  type GraphvizEdgeRoute,
+  validateElements, isWasmLoaded,
+  layoutGraphWasm,
+  type EdgeRoute,
 } from "./layout.js";
 
 const DEFAULT_WIDTH = 180;
@@ -489,10 +489,13 @@ export class Diagram {
 
     if (format === "png") {
       const { exportToPng } = await import("./export.js");
-      result.png = await exportToPng(elements);
-      const path = opts?.path ?? "diagram.png";
-      await writeFile!(path, result.png);
-      result.filePath = path;
+      const pngBytes = await exportToPng(elements);
+      if (pngBytes) {
+        result.png = pngBytes;
+        const path = opts?.path ?? "diagram.png";
+        await writeFile!(path, pngBytes);
+        result.filePath = path;
+      }
     }
 
     return result;
@@ -677,7 +680,7 @@ export class Diagram {
     const needsStagger = !edgeRoutes || this.edges.some(e => !edgeRoutes.has(`${e.from}->${e.to}`));
     if (needsStagger) {
       edgeCounts = new Map();
-      // Only count non-Graphviz-routed edges for stagger computation
+      // Only count non-WASM-routed edges for stagger computation
       for (const edge of this.edges) {
         if (!edgeRoutes?.has(`${edge.from}->${edge.to}`)) {
           edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
@@ -695,26 +698,26 @@ export class Diagram {
       const arrowId = arrowIds[ei];
       const isElbowed = co?.elbowed !== false; // default true
 
-      // Check for Graphviz-computed edge route (with index for multi-edges)
+      // Check for WASM-computed edge route (with index for multi-edges)
       const baseRouteKey = `${edge.from}->${edge.to}`;
       const edgePairIdx = edgePairCounts.get(baseRouteKey) ?? 0;
       edgePairCounts.set(baseRouteKey, edgePairIdx + 1);
       const routeKey = edgePairIdx === 0 ? baseRouteKey : `${baseRouteKey}#${edgePairIdx}`;
-      const gvRoute = edgeRoutes?.get(routeKey);
+      const edgeRoute = edgeRoutes?.get(routeKey);
 
       // Only track stagger indexes for TS-routed edges
       const outCount = edgeCounts?.get(edge.from) ?? 1;
-      const outIdx = gvRoute ? 0 : (edgeIndexes.get(edge.from) ?? 0);
-      if (!gvRoute) edgeIndexes.set(edge.from, outIdx + 1);
+      const outIdx = edgeRoute ? 0 : (edgeIndexes.get(edge.from) ?? 0);
+      if (!edgeRoute) edgeIndexes.set(edge.from, outIdx + 1);
 
       let arrowX: number, arrowY: number;
       let points: number[][];
 
-      if (gvRoute && gvRoute.points.length >= 2) {
-        // Use Graphviz-computed route
-        arrowX = gvRoute.points[0][0];
-        arrowY = gvRoute.points[0][1];
-        points = gvRoute.points.map(([px, py]) => [px - arrowX, py - arrowY]);
+      if (edgeRoute && edgeRoute.points.length >= 2) {
+        // Use WASM-computed route
+        arrowX = edgeRoute.points[0][0];
+        arrowY = edgeRoute.points[0][1];
+        points = edgeRoute.points.map(([px, py]) => [px - arrowX, py - arrowY]);
       } else {
         // Fallback: TS elbow routing
         const { sourcePoint, targetPoint, sourceEdge, targetEdge } =
@@ -798,10 +801,10 @@ export class Diagram {
       if (edge.label && labelTextId) {
         let labelX: number, labelY: number;
 
-        if (gvRoute?.labelPos) {
-          // Use Graphviz-computed label position
-          labelX = gvRoute.labelPos.x;
-          labelY = gvRoute.labelPos.y - 12;
+        if (edgeRoute?.labelPos) {
+          // Use WASM-computed label position
+          labelX = edgeRoute.labelPos.x;
+          labelY = edgeRoute.labelPos.y - 12;
         } else if (points.length >= 2) {
           // Fallback: midpoint of longest segment
           let bestLen = 0, bestSeg = 0;
@@ -1003,64 +1006,36 @@ export class Diagram {
     return elements;
   }
 
-  /** Assign x,y positions to all nodes. Priority: Graphviz → WASM grid → TS grid. */
-  private async layoutNodes(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, GraphvizEdgeRoute> }> {
-    // Try Graphviz layout first (async)
-    const gvResult = await this.layoutNodesGraphviz();
-    if (gvResult) return gvResult;
-
-    // Try WASM grid layout
-    if (isWasmLoaded()) {
-      const wasmResult = this.layoutNodesWasm();
-      if (wasmResult) return { positioned: wasmResult };
-    }
+  /** Assign x,y positions to all nodes. Priority: WASM Sugiyama → TS grid. */
+  private async layoutNodes(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, EdgeRoute> }> {
+    // Try WASM Sugiyama layout (async)
+    const wasmResult = await this.layoutNodesWasm();
+    if (wasmResult) return wasmResult;
 
     // Fallback: TS grid layout
     return { positioned: this.layoutNodesGrid() };
   }
 
-  private async layoutNodesGraphviz(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, GraphvizEdgeRoute> } | null> {
+  private async layoutNodesWasm(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, EdgeRoute> } | null> {
     const graphNodes = Array.from(this.nodes.values()).filter(
       n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond",
     );
     if (graphNodes.length === 0) return null;
 
-    const gvNodes = graphNodes.map(n => ({
+    const wasmNodes = graphNodes.map(n => ({
       id: n.id, width: n.width, height: n.height,
       row: n.row, col: n.col, absX: n.absX, absY: n.absY,
       type: n.type,
     }));
-    const gvEdges = this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
-    const gvGroups = Array.from(this.groups.entries()).map(([id, g]) => ({
+    const wasmEdges = this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
+    const wasmGroups = Array.from(this.groups.entries()).map(([id, g]) => ({
       id, label: g.label, children: g.children,
     }));
 
-    const result = await layoutGraphGraphviz(gvNodes, gvEdges, gvGroups.length > 0 ? gvGroups : undefined);
+    const result = await layoutGraphWasm(wasmNodes, wasmEdges, wasmGroups.length > 0 ? wasmGroups : undefined);
     if (!result) return null;
 
     return { positioned: this.applyPositions(result.nodes), edgeRoutes: result.edgeRoutes };
-  }
-
-  private layoutNodesWasm(): Map<string, PositionedNode> | null {
-    const nodesJson = JSON.stringify(
-      Array.from(this.nodes.values()).map(n => ({
-        id: n.id, width: n.width, height: n.height,
-        row: n.row ?? null, col: n.col ?? null,
-      })),
-    );
-    const edgesJson = JSON.stringify(
-      this.edges.map(e => ({ from: e.from, to: e.to })),
-    );
-
-    const resultJson = layoutGraph(nodesJson, edgesJson);
-    if (!resultJson) return null;
-
-    try {
-      const laid = JSON.parse(resultJson) as { id: string; x: number; y: number }[];
-      return this.applyPositions(laid);
-    } catch {
-      return null;
-    }
   }
 
   /** Apply layout positions to nodes, with absX/absY overrides and fallback for unpositioned nodes. */
