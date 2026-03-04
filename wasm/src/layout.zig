@@ -20,17 +20,71 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, out: []u8) !u
     var edge_count: usize = 0;
     edge_count = parseEdges(edges_json, &edges) catch return 0;
 
-    // Build DOT source string
-    var dot_buf: [DOT_BUF_SIZE]u8 = undefined;
-    const dot_len = buildDotString(&dot_buf, &nodes, node_count, &edges, edge_count);
-    if (dot_len == 0 or dot_len >= DOT_BUF_SIZE) return 0;
-    dot_buf[dot_len] = 0; // null-terminate for C
+    // Build graph programmatically via cgraph API (no DOT parser needed)
+    const graph = c.gviz_graph_new("G") orelse return 0;
 
-    // Parse DOT string into Graphviz graph
-    const graph = c.gviz_parse_dot(&dot_buf) orelse return 0;
+    // Set graph attributes
+    c.gviz_set_graph_attr(graph, "rankdir", "TB");
+    c.gviz_set_graph_attr(graph, "splines", "ortho");
+    c.gviz_set_graph_attr(graph, "nodesep", "0.5");
+    c.gviz_set_graph_attr(graph, "ranksep", "1.0");
+
+    // Set default node attributes so per-node agsafeset works
+    c.gviz_set_default_node_attr(graph, "width", "");
+    c.gviz_set_default_node_attr(graph, "height", "");
+    c.gviz_set_default_node_attr(graph, "fixedsize", "");
+
+    // Create nodes with size attributes
+    var node_ptrs: [MAX_NODES]?*anyopaque = undefined;
+    for (nodes[0..node_count], 0..) |n, i| {
+        const name_z = nullTerminate(n.id_slice) orelse {
+            c.gviz_graph_close(graph);
+            return 0;
+        };
+
+        const node_ptr = c.gviz_add_node(graph, name_z) orelse {
+            c.gviz_graph_close(graph);
+            return 0;
+        };
+        node_ptrs[i] = node_ptr;
+
+        // Set width/height in inches (72 points per inch)
+        var width_buf: [32]u8 = undefined;
+        const width_len = writeFloat(&width_buf, @as(f64, @floatFromInt(n.width)) / 72.0);
+        width_buf[width_len] = 0;
+        c.gviz_set_node_attr(graph, node_ptr, "width", @ptrCast(&width_buf));
+
+        var height_buf: [32]u8 = undefined;
+        const height_len = writeFloat(&height_buf, @as(f64, @floatFromInt(n.height)) / 72.0);
+        height_buf[height_len] = 0;
+        c.gviz_set_node_attr(graph, node_ptr, "height", @ptrCast(&height_buf));
+
+        c.gviz_set_node_attr(graph, node_ptr, "fixedsize", "true");
+    }
+
+    // Create edges
+    for (edges[0..edge_count], 0..) |e, ei| {
+        // Find source and target node pointers
+        var from_ptr: ?*anyopaque = null;
+        var to_ptr: ?*anyopaque = null;
+        for (nodes[0..node_count], 0..) |n, ni| {
+            if (std.mem.eql(u8, n.id_slice, e.from_slice)) from_ptr = node_ptrs[ni];
+            if (std.mem.eql(u8, n.id_slice, e.to_slice)) to_ptr = node_ptrs[ni];
+        }
+        if (from_ptr == null or to_ptr == null) continue;
+
+        // Edge name for uniqueness
+        var edge_name: [32]u8 = undefined;
+        const elen = writeInt(&edge_name, @intCast(ei));
+        edge_name[elen] = 0;
+        _ = c.gviz_add_edge(graph, from_ptr.?, to_ptr.?, @ptrCast(&edge_name));
+    }
 
     // Create GVC context with dot_layout plugin
-    const gvc = c.gviz_context_new() orelse return 0;
+    const gvc = c.gviz_context_new() orelse {
+        c.gviz_graph_close(graph);
+        return 0;
+    };
 
     // Run dot layout
     if (c.gviz_layout(gvc, graph) != 0) {
@@ -52,7 +106,7 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, out: []u8) !u
 
 // ── Graphviz C bridge FFI (from gviz_bridge.c) ──
 // Only linked when targeting WASM (Graphviz C is compiled for wasm32-wasi only).
-// Native test builds use parsing and DOT-building but not the layout C FFI.
+// Native test builds use parsing but not the layout C FFI.
 
 const builtin = @import("builtin");
 const is_wasm = builtin.cpu.arch == .wasm32;
@@ -79,47 +133,63 @@ const GvizBbox = extern struct {
 };
 
 // Graphviz C bridge: real extern declarations for WASM, no-op shims for native tests
-const c = if (is_wasm) struct {
-    extern fn gviz_context_new() ?*anyopaque;
-    extern fn gviz_context_free(ctx: ?*anyopaque) void;
-    extern fn gviz_parse_dot(dot: [*]const u8) ?*anyopaque;
-    extern fn gviz_graph_close(g: ?*anyopaque) void;
-    extern fn gviz_layout(ctx: ?*anyopaque, g: ?*anyopaque) c_int;
-    extern fn gviz_free_layout(ctx: ?*anyopaque, g: ?*anyopaque) void;
-    extern fn gviz_first_node(g: ?*anyopaque) ?*anyopaque;
-    extern fn gviz_next_node(g: ?*anyopaque, n: ?*anyopaque) ?*anyopaque;
-    extern fn gviz_node_name(n: ?*anyopaque) ?[*:0]const u8;
-    extern fn gviz_node_coord(n: ?*anyopaque, x: *f64, y: *f64) void;
-    extern fn gviz_first_out_edge(g: ?*anyopaque, n: ?*anyopaque) ?*anyopaque;
-    extern fn gviz_next_out_edge(g: ?*anyopaque, e: ?*anyopaque) ?*anyopaque;
-    extern fn gviz_edge_head(e: ?*anyopaque) ?*anyopaque;
-    extern fn gviz_edge_tail(e: ?*anyopaque) ?*anyopaque;
-    extern fn gviz_edge_spline(e: ?*anyopaque, out: *GvizSpline) c_int;
-    extern fn gviz_graph_bbox(g: ?*anyopaque) GvizBbox;
+pub const c = if (is_wasm) struct {
+    // Graph construction (programmatic — no DOT parser needed)
+    pub extern fn gviz_graph_new(name: [*:0]const u8) ?*anyopaque;
+    pub extern fn gviz_add_node(g: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
+    pub extern fn gviz_add_edge(g: ?*anyopaque, tail: ?*anyopaque, head: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
+    pub extern fn gviz_set_default_node_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
+    pub extern fn gviz_set_graph_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
+    pub extern fn gviz_set_node_attr(g: ?*anyopaque, n: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
+
+    // Context and layout
+    pub extern fn gviz_context_new() ?*anyopaque;
+    pub extern fn gviz_context_free(ctx: ?*anyopaque) void;
+    pub extern fn gviz_graph_close(g: ?*anyopaque) void;
+    pub extern fn gviz_layout(ctx: ?*anyopaque, g: ?*anyopaque) c_int;
+    pub extern fn gviz_free_layout(ctx: ?*anyopaque, g: ?*anyopaque) void;
+
+    // Node iteration
+    pub extern fn gviz_first_node(g: ?*anyopaque) ?*anyopaque;
+    pub extern fn gviz_next_node(g: ?*anyopaque, n: ?*anyopaque) ?*anyopaque;
+    pub extern fn gviz_node_name(n: ?*anyopaque) ?[*:0]const u8;
+    pub extern fn gviz_node_coord(n: ?*anyopaque, x: *f64, y: *f64) void;
+
+    // Edge iteration
+    pub extern fn gviz_first_out_edge(g: ?*anyopaque, n: ?*anyopaque) ?*anyopaque;
+    pub extern fn gviz_next_out_edge(g: ?*anyopaque, e: ?*anyopaque) ?*anyopaque;
+    pub extern fn gviz_edge_head(e: ?*anyopaque) ?*anyopaque;
+    pub extern fn gviz_edge_tail(e: ?*anyopaque) ?*anyopaque;
+    pub extern fn gviz_edge_spline(e: ?*anyopaque, out: *GvizSpline) c_int;
+    pub extern fn gviz_graph_bbox(g: ?*anyopaque) GvizBbox;
 } else struct {
-    fn gviz_context_new() ?*anyopaque { return null; }
-    fn gviz_context_free(_: ?*anyopaque) void {}
-    fn gviz_parse_dot(_: [*]const u8) ?*anyopaque { return null; }
-    fn gviz_graph_close(_: ?*anyopaque) void {}
-    fn gviz_layout(_: ?*anyopaque, _: ?*anyopaque) c_int { return -1; }
-    fn gviz_free_layout(_: ?*anyopaque, _: ?*anyopaque) void {}
-    fn gviz_first_node(_: ?*anyopaque) ?*anyopaque { return null; }
-    fn gviz_next_node(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
-    fn gviz_node_name(_: ?*anyopaque) ?[*:0]const u8 { return null; }
-    fn gviz_node_coord(_: ?*anyopaque, _: *f64, _: *f64) void {}
-    fn gviz_first_out_edge(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
-    fn gviz_next_out_edge(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
-    fn gviz_edge_head(_: ?*anyopaque) ?*anyopaque { return null; }
-    fn gviz_edge_tail(_: ?*anyopaque) ?*anyopaque { return null; }
-    fn gviz_edge_spline(_: ?*anyopaque, _: *GvizSpline) c_int { return 0; }
-    fn gviz_graph_bbox(_: ?*anyopaque) GvizBbox { return .{ .ll_x = 0, .ll_y = 0, .ur_x = 0, .ur_y = 0 }; }
+    pub fn gviz_graph_new(_: [*:0]const u8) ?*anyopaque { return null; }
+    pub fn gviz_add_node(_: ?*anyopaque, _: [*:0]const u8) ?*anyopaque { return null; }
+    pub fn gviz_add_edge(_: ?*anyopaque, _: ?*anyopaque, _: ?*anyopaque, _: [*:0]const u8) ?*anyopaque { return null; }
+    pub fn gviz_set_default_node_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
+    pub fn gviz_set_graph_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
+    pub fn gviz_set_node_attr(_: ?*anyopaque, _: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
+    pub fn gviz_context_new() ?*anyopaque { return null; }
+    pub fn gviz_context_free(_: ?*anyopaque) void {}
+    pub fn gviz_graph_close(_: ?*anyopaque) void {}
+    pub fn gviz_layout(_: ?*anyopaque, _: ?*anyopaque) c_int { return -1; }
+    pub fn gviz_free_layout(_: ?*anyopaque, _: ?*anyopaque) void {}
+    pub fn gviz_first_node(_: ?*anyopaque) ?*anyopaque { return null; }
+    pub fn gviz_next_node(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
+    pub fn gviz_node_name(_: ?*anyopaque) ?[*:0]const u8 { return null; }
+    pub fn gviz_node_coord(_: ?*anyopaque, _: *f64, _: *f64) void {}
+    pub fn gviz_first_out_edge(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
+    pub fn gviz_next_out_edge(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
+    pub fn gviz_edge_head(_: ?*anyopaque) ?*anyopaque { return null; }
+    pub fn gviz_edge_tail(_: ?*anyopaque) ?*anyopaque { return null; }
+    pub fn gviz_edge_spline(_: ?*anyopaque, _: *GvizSpline) c_int { return 0; }
+    pub fn gviz_graph_bbox(_: ?*anyopaque) GvizBbox { return .{ .ll_x = 0, .ll_y = 0, .ur_x = 0, .ur_y = 0 }; }
 };
 
 // ── Constants ──
 
 const MAX_NODES = 256;
 const MAX_EDGES = 512;
-const DOT_BUF_SIZE = 64 * 1024;
 
 const Node = struct {
     id_slice: []const u8,
@@ -133,74 +203,6 @@ const Edge = struct {
     from_slice: []const u8,
     to_slice: []const u8,
 };
-
-// ── DOT String Builder ──
-
-fn buildDotString(buf: *[DOT_BUF_SIZE]u8, nodes: *[MAX_NODES]Node, node_count: usize, edges: *[MAX_EDGES]Edge, edge_count: usize) usize {
-    var w: usize = 0;
-
-    w += copySlice(buf[w..], "digraph G {\n");
-    w += copySlice(buf[w..], "  rankdir=TB;\n");
-    w += copySlice(buf[w..], "  splines=ortho;\n");
-    w += copySlice(buf[w..], "  nodesep=0.5;\n");
-    w += copySlice(buf[w..], "  ranksep=1.0;\n");
-
-    // Declare nodes with size attributes (Graphviz uses inches, 1 inch = 72 pts)
-    for (nodes[0..node_count]) |n| {
-        if (w + 256 >= DOT_BUF_SIZE) break;
-        w += copySlice(buf[w..], "  \"");
-        w += copySlice(buf[w..], n.id_slice);
-        w += copySlice(buf[w..], "\" [width=");
-        w += writeFloat(buf[w..], @as(f64, @floatFromInt(n.width)) / 72.0);
-        w += copySlice(buf[w..], ", height=");
-        w += writeFloat(buf[w..], @as(f64, @floatFromInt(n.height)) / 72.0);
-        w += copySlice(buf[w..], ", fixedsize=true];\n");
-    }
-
-    // Group nodes with same row using rank=same
-    var max_row: i32 = -1;
-    for (nodes[0..node_count]) |n| {
-        if (n.row) |r| {
-            if (r > max_row) max_row = r;
-        }
-    }
-    if (max_row >= 0) {
-        var row: i32 = 0;
-        while (row <= max_row) : (row += 1) {
-            var has_nodes = false;
-            for (nodes[0..node_count]) |n| {
-                if (n.row != null and n.row.? == row) {
-                    has_nodes = true;
-                    break;
-                }
-            }
-            if (!has_nodes) continue;
-            if (w + 256 >= DOT_BUF_SIZE) break;
-            w += copySlice(buf[w..], "  { rank=same; ");
-            for (nodes[0..node_count]) |n| {
-                if (n.row != null and n.row.? == row) {
-                    w += copySlice(buf[w..], "\"");
-                    w += copySlice(buf[w..], n.id_slice);
-                    w += copySlice(buf[w..], "\"; ");
-                }
-            }
-            w += copySlice(buf[w..], "}\n");
-        }
-    }
-
-    // Declare edges
-    for (edges[0..edge_count]) |e| {
-        if (w + 256 >= DOT_BUF_SIZE) break;
-        w += copySlice(buf[w..], "  \"");
-        w += copySlice(buf[w..], e.from_slice);
-        w += copySlice(buf[w..], "\" -> \"");
-        w += copySlice(buf[w..], e.to_slice);
-        w += copySlice(buf[w..], "\";\n");
-    }
-
-    w += copySlice(buf[w..], "}\n");
-    return w;
-}
 
 // ── Output: Extract Graphviz Layout Results ──
 
@@ -346,9 +348,6 @@ fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8,
                         result.points_y[result.point_count] = @intFromFloat(y_max - pt.y);
                         result.point_count += 1;
                         i += 3;
-                        if (i == 3 and i < spline.point_count) {
-                            // Include the first point, then skip by 3
-                        }
                     }
 
                     // Add end point if present
@@ -365,6 +364,24 @@ fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8,
     }
 
     return result;
+}
+
+// ── Null-termination helper ──
+
+/// Copy a slice into a stack buffer and null-terminate it for C FFI.
+/// Returns a sentinel-terminated pointer, or null if the slice is too long.
+const NT_BUF_COUNT = 16;
+const NT_BUF_SIZE = 256;
+var nt_bufs: [NT_BUF_COUNT][NT_BUF_SIZE]u8 = undefined;
+var nt_idx: usize = 0;
+
+fn nullTerminate(slice: []const u8) ?[*:0]const u8 {
+    if (slice.len >= NT_BUF_SIZE) return null;
+    const idx = nt_idx % NT_BUF_COUNT;
+    nt_idx += 1;
+    @memcpy(nt_bufs[idx][0..slice.len], slice);
+    nt_bufs[idx][slice.len] = 0;
+    return @ptrCast(&nt_bufs[idx]);
 }
 
 // ── Float formatting ──
@@ -465,19 +482,4 @@ test "edge parsing" {
     try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expect(std.mem.eql(u8, edges[0].from_slice, "a"));
     try std.testing.expect(std.mem.eql(u8, edges[0].to_slice, "b"));
-}
-
-test "dot string builder" {
-    var nodes: [MAX_NODES]Node = undefined;
-    nodes[0] = .{ .id_slice = "api", .width = 180, .height = 80, .row = 0, .col = 0 };
-    nodes[1] = .{ .id_slice = "db", .width = 180, .height = 80, .row = 1, .col = 0 };
-    var edges: [MAX_EDGES]Edge = undefined;
-    edges[0] = .{ .from_slice = "api", .to_slice = "db" };
-    var dot_buf: [DOT_BUF_SIZE]u8 = undefined;
-    const dot_len = buildDotString(&dot_buf, &nodes, 2, &edges, 1);
-    try std.testing.expect(dot_len > 0);
-    const dot_str = dot_buf[0..dot_len];
-    try std.testing.expect(std.mem.indexOf(u8, dot_str, "digraph G") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dot_str, "\"api\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dot_str, "\"api\" -> \"db\"") != null);
 }

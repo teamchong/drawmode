@@ -81,6 +81,7 @@ export fn zlibCompress(
     return compress_mod.zlibCompress(in_slice, out_slice) catch 0;
 }
 
+
 test "alloc and reset" {
     resetHeap();
     const ptr = alloc(64);

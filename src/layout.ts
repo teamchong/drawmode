@@ -5,6 +5,11 @@
 
 import { z } from "zod";
 
+class WasiExit extends Error {
+  code: number;
+  constructor(code: number) { super(`WASI exit: ${code}`); this.code = code; }
+}
+
 let _dirname: string | undefined;
 async function getDirname(): Promise<string> {
   if (!_dirname) {
@@ -55,10 +60,27 @@ export async function loadWasm(wasmPath?: string): Promise<void> {
     const ref: { memory: WebAssembly.Memory | null } = { memory: null };
     const wasiImports = {
       wasi_snapshot_preview1: {
+        environ_get: () => 0,
+        environ_sizes_get: (_countPtr: number, _sizePtr: number) => {
+          if (ref.memory) {
+            const view = new DataView(ref.memory.buffer);
+            view.setUint32(_countPtr, 0, true);
+            view.setUint32(_sizePtr, 0, true);
+          }
+          return 0;
+        },
+        clock_time_get: (_id: number, _precision: bigint, resultPtr: number) => {
+          if (ref.memory) {
+            new DataView(ref.memory.buffer).setBigUint64(resultPtr, BigInt(0), true);
+          }
+          return 0;
+        },
         fd_close: () => 0,
         fd_fdstat_get: () => 0,
+        fd_filestat_get: () => 8, // EBADF
         fd_prestat_get: () => 8, // EBADF — no preopened dirs
         fd_prestat_dir_name: () => 8,
+        fd_pwrite: () => 0,
         fd_read: () => 0,
         fd_seek: () => 0,
         fd_write: (_fd: number, _iovs: number, _iovsLen: number, nwrittenPtr: number) => {
@@ -67,11 +89,20 @@ export async function loadWasm(wasmPath?: string): Promise<void> {
           }
           return 0;
         },
-        proc_exit: () => {},
+        path_filestat_get: () => 8, // EBADF
+        proc_exit: (code: number) => { throw new WasiExit(code); },
       },
     };
     const { instance } = await WebAssembly.instantiate(bytes, wasiImports);
     ref.memory = (instance.exports as Record<string, unknown>).memory as WebAssembly.Memory;
+    // Initialize WASI C runtime (libc, malloc, etc.)
+    // _start calls main() then proc_exit(). We throw from proc_exit to break out.
+    const start = (instance.exports as Record<string, unknown>)._start as (() => void) | undefined;
+    if (start) {
+      try { start(); } catch (e) {
+        if (!(e instanceof WasiExit)) throw e;
+      }
+    }
     wasmInstance = instance.exports as unknown as WasmLayoutExports;
   } catch {
     // WASM not available — fall back to TS layout

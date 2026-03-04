@@ -39,6 +39,14 @@ typedef struct {
 gviz_context_t gviz_context_new(void);
 void gviz_context_free(gviz_context_t ctx);
 
+/* Graph construction (programmatic, no DOT parser needed) */
+gviz_graph_t gviz_graph_new(const char *name);
+gviz_node_t gviz_add_node(gviz_graph_t g, const char *name);
+gviz_edge_t gviz_add_edge(gviz_graph_t g, gviz_node_t tail, gviz_node_t head, const char *name);
+void gviz_set_default_node_attr(gviz_graph_t g, const char *name, const char *value);
+void gviz_set_graph_attr(gviz_graph_t g, const char *name, const char *value);
+void gviz_set_node_attr(gviz_graph_t g, gviz_node_t n, const char *name, const char *value);
+
 /* Graph operations */
 gviz_graph_t gviz_parse_dot(const char *dot_string);
 void gviz_graph_close(gviz_graph_t g);
