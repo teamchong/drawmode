@@ -647,20 +647,7 @@ export class Diagram {
     }
 
     // Create arrows for edges
-    let edgeCounts: Map<string, number> | undefined;
-    const edgeIndexes = new Map<string, number>();
     const edgePairCounts = new Map<string, number>(); // track multi-edges between same nodes
-
-    const needsStagger = !edgeRoutes || this.edges.some(e => !edgeRoutes.has(`${e.from}->${e.to}`));
-    if (needsStagger) {
-      edgeCounts = new Map();
-      // Only count non-WASM-routed edges for stagger computation
-      for (const edge of this.edges) {
-        if (!edgeRoutes?.has(`${edge.from}->${edge.to}`)) {
-          edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
-        }
-      }
-    }
 
     for (let ei = 0; ei < this.edges.length; ei++) {
       const edge = this.edges[ei];
@@ -679,95 +666,23 @@ export class Diagram {
       const routeKey = edgePairIdx === 0 ? baseRouteKey : `${baseRouteKey}#${edgePairIdx}`;
       const edgeRoute = edgeRoutes?.get(routeKey);
 
-      // Only track stagger indexes for TS-routed edges
-      const outCount = edgeCounts?.get(edge.from) ?? 1;
-      const outIdx = edgeRoute ? 0 : (edgeIndexes.get(edge.from) ?? 0);
-      if (!edgeRoute) edgeIndexes.set(edge.from, outIdx + 1);
-
       let arrowX: number, arrowY: number;
       let points: number[][];
 
       if (edgeRoute && edgeRoute.points.length >= 2) {
-        // Use WASM-computed route
+        // Use Graphviz-computed route (orthogonal spline points)
         arrowX = edgeRoute.points[0][0];
         arrowY = edgeRoute.points[0][1];
         points = edgeRoute.points.map(([px, py]) => [px - arrowX, py - arrowY]);
       } else {
-        // Fallback: TS elbow routing
-        const { sourcePoint, targetPoint, sourceEdge, targetEdge } =
-          calculateArrowEndpoints(fromNode, toNode, outIdx, outCount);
-
-        arrowX = sourcePoint.x;
-        arrowY = sourcePoint.y;
-
-        const dx = targetPoint.x - sourcePoint.x;
-        const dy = targetPoint.y - sourcePoint.y;
-
-        if (!isElbowed) {
-          points = [[0, 0], [dx, dy]];
-        } else if (sourceEdge === "right" || sourceEdge === "left") {
-          // Horizontal source edge → route via midX
-          if (Math.abs(dy) < 10) {
-            // Straight horizontal — check for obstacle
-            const blocker = findBlockingNodeTS(arrowX, arrowY, arrowX + dx, arrowY, positioned, edge.from, edge.to, OBSTACLE_PADDING);
-            if (blocker) {
-              const obsY = blocker.y ?? 0;
-              const obsTop = obsY - OBSTACLE_PADDING;
-              const obsBottom = obsY + blocker.height + OBSTACLE_PADDING;
-              const midX = Math.round(dx / 2);
-              const detourY = (arrowY - obsTop < obsBottom - arrowY && arrowY - obsTop >= 0) ? obsTop - arrowY : obsBottom - arrowY;
-              points = [[0, 0], [midX, 0], [midX, detourY], [dx, detourY], [dx, dy]];
-            } else {
-              points = [[0, 0], [dx, 0]];
-            }
-          } else {
-            const midX = Math.round(dx / 2);
-            // Check middle vertical segment for obstacles
-            const blocker = findBlockingNodeTS(arrowX + midX, arrowY, arrowX + midX, arrowY + dy, positioned, edge.from, edge.to, OBSTACLE_PADDING);
-            if (blocker) {
-              const obsX = blocker.x ?? 0;
-              const obsLeft = obsX - OBSTACLE_PADDING;
-              const obsRight = obsX + blocker.width + OBSTACLE_PADDING;
-              const absMidX = arrowX + midX;
-              const shiftedX = (absMidX - obsLeft <= obsRight - absMidX) ? obsLeft : obsRight;
-              const relShiftedX = shiftedX - arrowX;
-              points = [[0, 0], [relShiftedX, 0], [relShiftedX, dy], [dx, dy]];
-            } else {
-              points = [[0, 0], [midX, 0], [midX, dy], [dx, dy]];
-            }
-          }
-        } else {
-          // Vertical source edge (top/bottom) or default → route via midY
-          if (Math.abs(dx) < 10) {
-            // Straight vertical — check for obstacle
-            const blocker = findBlockingNodeTS(arrowX, arrowY, arrowX, arrowY + dy, positioned, edge.from, edge.to, OBSTACLE_PADDING);
-            if (blocker) {
-              const obsX = blocker.x ?? 0;
-              const obsLeft = obsX - OBSTACLE_PADDING;
-              const obsRight = obsX + blocker.width + OBSTACLE_PADDING;
-              const midY = Math.round(dy / 2);
-              const detourX = (arrowX - obsLeft < obsRight - arrowX && arrowX - obsLeft >= 0) ? obsLeft - arrowX : obsRight - arrowX;
-              points = [[0, 0], [0, midY], [detourX, midY], [dx, dy]];
-            } else {
-              points = [[0, 0], [0, dy]];
-            }
-          } else {
-            const midY = Math.round(dy / 2);
-            // Check middle horizontal segment for obstacles
-            const blocker = findBlockingNodeTS(arrowX, arrowY + midY, arrowX + dx, arrowY + midY, positioned, edge.from, edge.to, OBSTACLE_PADDING);
-            if (blocker) {
-              const obsY = blocker.y ?? 0;
-              const obsTop = obsY - OBSTACLE_PADDING;
-              const obsBottom = obsY + blocker.height + OBSTACLE_PADDING;
-              const absMidY = arrowY + midY;
-              const shiftedY = (absMidY - obsTop <= obsBottom - absMidY) ? obsTop : obsBottom;
-              const relShiftedY = shiftedY - arrowY;
-              points = [[0, 0], [0, relShiftedY], [dx, relShiftedY], [dx, dy]];
-            } else {
-              points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
-            }
-          }
-        }
+        // Fallback: straight line from source center to target center
+        const fx = (fromNode.x ?? 0) + fromNode.width / 2;
+        const fy = (fromNode.y ?? 0) + fromNode.height / 2;
+        const tx = (toNode.x ?? 0) + toNode.width / 2;
+        const ty = (toNode.y ?? 0) + toNode.height / 2;
+        arrowX = fx;
+        arrowY = fy;
+        points = [[0, 0], [tx - fx, ty - fy]];
       }
 
       let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
@@ -1156,97 +1071,4 @@ function resolveColor(opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"):
 interface PositionedNode extends GraphNode {
   x?: number;
   y?: number;
-}
-
-interface Point { x: number; y: number; }
-
-const OBSTACLE_PADDING = 20;
-
-/** Check if an axis-aligned segment intersects a padded rectangle. */
-function segmentHitsRect(
-  x1: number, y1: number, x2: number, y2: number,
-  rx: number, ry: number, rw: number, rh: number, padding: number,
-): boolean {
-  const prx = rx - padding, pry = ry - padding;
-  const prw = rw + padding * 2, prh = rh + padding * 2;
-  if (y1 === y2) {
-    // Horizontal segment
-    if (y1 < pry || y1 > pry + prh) return false;
-    const segMin = Math.min(x1, x2), segMax = Math.max(x1, x2);
-    return segMax > prx && segMin < prx + prw;
-  } else if (x1 === x2) {
-    // Vertical segment
-    if (x1 < prx || x1 > prx + prw) return false;
-    const segMin = Math.min(y1, y2), segMax = Math.max(y1, y2);
-    return segMax > pry && segMin < pry + prh;
-  }
-  return false;
-}
-
-/** Find the first positioned node whose bbox is hit by the segment, skipping source/target. */
-function findBlockingNodeTS(
-  x1: number, y1: number, x2: number, y2: number,
-  positioned: Map<string, PositionedNode>, skipFrom: string, skipTo: string, padding: number,
-): PositionedNode | null {
-  for (const [id, n] of positioned) {
-    if (id === skipFrom || id === skipTo) continue;
-    if (n.type === "text" || n.type === "line") continue;
-    const nx = n.x ?? 0, ny = n.y ?? 0;
-    if (segmentHitsRect(x1, y1, x2, y2, nx, ny, n.width, n.height, padding)) return n;
-  }
-  return null;
-}
-
-function calculateArrowEndpoints(
-  from: PositionedNode, to: PositionedNode,
-  edgeIdx: number, edgeCount: number,
-): { sourcePoint: Point; targetPoint: Point; sourceEdge: string; targetEdge: string } {
-  const fx = from.x ?? 0, fy = from.y ?? 0;
-  const tx = to.x ?? 0, ty = to.y ?? 0;
-
-  // Stagger ratio: distribute arrows across edge
-  const staggerPositions = [0.5, 0.35, 0.65, 0.2, 0.8];
-  const stagger = edgeCount === 1 ? 0.5 : (staggerPositions[edgeIdx] ?? 0.5);
-
-  // Determine edges based on relative position
-  const dy = (ty + to.height / 2) - (fy + from.height / 2);
-  const dx = (tx + to.width / 2) - (fx + from.width / 2);
-
-  // Check if boxes don't overlap vertically (clear row gap) — prefer vertical routing
-  const fromBottom = fy + from.height;
-  const toBottom = ty + to.height;
-  const hasVerticalGap = (fromBottom < ty) || (toBottom < fy);
-  // Check if boxes don't overlap horizontally (clear col gap) — prefer horizontal routing
-  const fromRight = fx + from.width;
-  const toRight = tx + to.width;
-  const hasHorizontalGap = (fromRight < tx) || (toRight < fx);
-
-  let sourceEdge: string, targetEdge: string;
-  let sourcePoint: Point, targetPoint: Point;
-
-  if (hasVerticalGap || (!hasHorizontalGap && Math.abs(dy) > Math.abs(dx))) {
-    // Vertical relationship
-    if (dy > 0) {
-      sourceEdge = "bottom"; targetEdge = "top";
-      sourcePoint = { x: fx + from.width * stagger, y: fy + from.height };
-      targetPoint = { x: tx + to.width * stagger, y: ty };
-    } else {
-      sourceEdge = "top"; targetEdge = "bottom";
-      sourcePoint = { x: fx + from.width * stagger, y: fy };
-      targetPoint = { x: tx + to.width * stagger, y: ty + to.height };
-    }
-  } else {
-    // Horizontal relationship
-    if (dx > 0) {
-      sourceEdge = "right"; targetEdge = "left";
-      sourcePoint = { x: fx + from.width, y: fy + from.height * stagger };
-      targetPoint = { x: tx, y: ty + to.height * stagger };
-    } else {
-      sourceEdge = "left"; targetEdge = "right";
-      sourcePoint = { x: fx, y: fy + from.height * stagger };
-      targetPoint = { x: tx + to.width, y: ty + to.height * stagger };
-    }
-  }
-
-  return { sourcePoint, targetPoint, sourceEdge, targetEdge };
 }

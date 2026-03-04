@@ -118,7 +118,7 @@ describe("Diagram SDK", () => {
     expect(result.json.appState).toBeDefined();
   });
 
-  it("multiple arrows from same source are staggered", async () => {
+  it("multiple arrows from same source connect to different targets", async () => {
     const d = new Diagram();
     const src = d.addBox("Source", { row: 0, col: 1 });
     const t1 = d.addBox("Target1", { row: 1, col: 0 });
@@ -132,8 +132,9 @@ describe("Diagram SDK", () => {
     const arrows = elements.filter(e => e.type === "arrow");
     expect(arrows.length).toBe(2);
 
-    // Arrows should have different x positions (staggered)
-    expect(arrows[0].x).not.toBe(arrows[1].x);
+    // Both arrows should have endpoint bindings to different targets
+    const endBindings = arrows.map(a => a.endBinding?.elementId);
+    expect(endBindings[0]).not.toBe(endBindings[1]);
   });
 
 

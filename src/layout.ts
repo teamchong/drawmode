@@ -1,8 +1,6 @@
 /**
- * Layout bridge — Zig WASM for graph layout and validation.
- * TS grid layout as last-resort fallback.
- *
- * Layout priority: WASM Sugiyama → TS grid (in sdk.ts)
+ * Layout bridge — Zig WASM with statically-linked Graphviz C for graph layout,
+ * plus validation. Graphviz `dot` engine handles layout and edge routing.
  */
 
 import { z } from "zod";
@@ -52,7 +50,28 @@ export async function loadWasm(wasmPath?: string): Promise<void> {
     const dir = await getDirname();
     const path = wasmPath ?? join(dir, "..", "wasm", "zig-out", "bin", "drawmode.wasm");
     const bytes = await readFile(path);
-    const { instance } = await WebAssembly.instantiate(bytes, {});
+    // WASI imports — the WASM module targets wasm32-wasi and requires these syscalls.
+    // We provide minimal implementations since only layout computation is used (no I/O).
+    const ref: { memory: WebAssembly.Memory | null } = { memory: null };
+    const wasiImports = {
+      wasi_snapshot_preview1: {
+        fd_close: () => 0,
+        fd_fdstat_get: () => 0,
+        fd_prestat_get: () => 8, // EBADF — no preopened dirs
+        fd_prestat_dir_name: () => 8,
+        fd_read: () => 0,
+        fd_seek: () => 0,
+        fd_write: (_fd: number, _iovs: number, _iovsLen: number, nwrittenPtr: number) => {
+          if (ref.memory) {
+            new DataView(ref.memory.buffer).setUint32(nwrittenPtr, 0, true);
+          }
+          return 0;
+        },
+        proc_exit: () => {},
+      },
+    };
+    const { instance } = await WebAssembly.instantiate(bytes, wasiImports);
+    ref.memory = (instance.exports as Record<string, unknown>).memory as WebAssembly.Memory;
     wasmInstance = instance.exports as unknown as WasmLayoutExports;
   } catch {
     // WASM not available — fall back to TS layout
