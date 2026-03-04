@@ -159,12 +159,17 @@ function parseJson0Result(
 
   // Parse edge routing
   const edgeRoutes = new Map<string, GraphvizEdgeRoute>();
+  const edgePairCounts = new Map<string, number>();
   for (const edge of (json0.edges as Record<string, unknown>[]) ?? []) {
     const fromId = gvidToId.get(edge.tail as number);
     const toId = gvidToId.get(edge.head as number);
     if (!fromId || !toId) continue;
 
-    const key = `${fromId}->${toId}`;
+    // Use index suffix to handle multiple edges between same nodes
+    const baseKey = `${fromId}->${toId}`;
+    const pairIdx = edgePairCounts.get(baseKey) ?? 0;
+    edgePairCounts.set(baseKey, pairIdx + 1);
+    const key = pairIdx === 0 ? baseKey : `${baseKey}#${pairIdx}`;
 
     // Extract path points from _draw_ B-spline operations (deduped in one pass)
     const drawOps = edge._draw_ as { op: string; points?: [number, number][] }[] | undefined;

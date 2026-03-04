@@ -512,9 +512,10 @@ export class Diagram {
       });
     }
 
-    // Create arrows for edges — only compute stagger counts if needed for TS fallback routing
+    // Create arrows for edges
     let edgeCounts: Map<string, number> | undefined;
     const edgeIndexes = new Map<string, number>();
+    const edgePairCounts = new Map<string, number>(); // track multi-edges between same nodes
 
     const needsStagger = !edgeRoutes || this.edges.some(e => !edgeRoutes.has(`${e.from}->${e.to}`));
     if (needsStagger) {
@@ -533,8 +534,11 @@ export class Diagram {
       const arrowId = nextId("arr");
       const isElbowed = co?.elbowed !== false; // default true
 
-      // Check for Graphviz-computed edge route
-      const routeKey = `${edge.from}->${edge.to}`;
+      // Check for Graphviz-computed edge route (with index for multi-edges)
+      const baseRouteKey = `${edge.from}->${edge.to}`;
+      const edgePairIdx = edgePairCounts.get(baseRouteKey) ?? 0;
+      edgePairCounts.set(baseRouteKey, edgePairIdx + 1);
+      const routeKey = edgePairIdx === 0 ? baseRouteKey : `${baseRouteKey}#${edgePairIdx}`;
       const gvRoute = edgeRoutes?.get(routeKey);
 
       // Only track stagger indexes for TS-routed edges

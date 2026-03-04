@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("util.zig");
 
 /// Validate Excalidraw elements for structural correctness.
 ///
@@ -201,87 +202,11 @@ const ShapeRect = struct {
     h: i32,
 };
 
-fn findMatchingBrace(json: []const u8) usize {
-    var depth: i32 = 0;
-    for (json, 0..) |c, i| {
-        if (c == '{') depth += 1;
-        if (c == '}') {
-            depth -= 1;
-            if (depth == 0) return i + 1;
-        }
-    }
-    return json.len;
-}
-
-fn extractStringField(obj: []const u8, field: []const u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i + field.len + 3 < obj.len) : (i += 1) {
-        if (obj[i] == '"' and i + 1 + field.len < obj.len and
-            std.mem.eql(u8, obj[i + 1 .. i + 1 + field.len], field) and
-            obj[i + 1 + field.len] == '"')
-        {
-            var j = i + 1 + field.len + 1;
-            while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
-            if (j < obj.len and obj[j] == '"') {
-                j += 1;
-                const start = j;
-                while (j < obj.len and obj[j] != '"') : (j += 1) {}
-                return obj[start..j];
-            }
-        }
-    }
-    return null;
-}
-
-fn extractNestedStringField(obj: []const u8, outer: []const u8, inner: []const u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i + outer.len + 3 < obj.len) : (i += 1) {
-        if (obj[i] == '"' and i + 1 + outer.len < obj.len and
-            std.mem.eql(u8, obj[i + 1 .. i + 1 + outer.len], outer) and
-            obj[i + 1 + outer.len] == '"')
-        {
-            var j = i + 1 + outer.len + 1;
-            while (j < obj.len and obj[j] != '{') : (j += 1) {}
-            if (j >= obj.len) return null;
-            const nested_end = findMatchingBrace(obj[j..]) + j;
-            return extractStringField(obj[j..nested_end], inner);
-        }
-    }
-    return null;
-}
-
-fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
-    var i: usize = 0;
-    while (i + field.len + 3 < obj.len) : (i += 1) {
-        if (obj[i] == '"' and i + 1 + field.len < obj.len and
-            std.mem.eql(u8, obj[i + 1 .. i + 1 + field.len], field) and
-            obj[i + 1 + field.len] == '"')
-        {
-            var j = i + 1 + field.len + 1;
-            while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
-            if (j >= obj.len) return null;
-            if (j + 4 <= obj.len and std.mem.eql(u8, obj[j .. j + 4], "null")) return null;
-
-            var negative = false;
-            if (obj[j] == '-') {
-                negative = true;
-                j += 1;
-            }
-            var val: i32 = 0;
-            while (j < obj.len and obj[j] >= '0' and obj[j] <= '9') : (j += 1) {
-                val = val * 10 + @as(i32, @intCast(obj[j] - '0'));
-            }
-            return if (negative) -val else val;
-        }
-    }
-    return null;
-}
-
-fn copySlice(dst: []u8, src: []const u8) usize {
-    if (dst.len < src.len) return 0;
-    @memcpy(dst[0..src.len], src);
-    return src.len;
-}
+const findMatchingBrace = util.findMatchingBrace;
+const extractStringField = util.extractStringField;
+const extractNestedStringField = util.extractNestedStringField;
+const extractIntField = util.extractIntField;
+const copySlice = util.copySlice;
 
 test "validate valid elements" {
     const elements =

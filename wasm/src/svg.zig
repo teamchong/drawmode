@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("util.zig");
 
 /// Render Excalidraw elements to SVG.
 ///
@@ -263,14 +264,14 @@ fn parseElements(json: []const u8, out: *[512]Elem, count: *usize) void {
 
         var elem = Elem{
             .elem_type = .unknown,
-            .x = extractIntField(obj, "\"x\"") orelse 0,
-            .y = extractIntField(obj, "\"y\"") orelse 0,
-            .w = extractIntField(obj, "\"width\"") orelse 0,
-            .h = extractIntField(obj, "\"height\"") orelse 0,
+            .x = extractIntField(obj, "x") orelse 0,
+            .y = extractIntField(obj, "y") orelse 0,
+            .w = extractIntField(obj, "width") orelse 0,
+            .h = extractIntField(obj, "height") orelse 0,
             .fill = extractStringField(obj, "backgroundColor") orelse "#ffffff",
             .stroke = extractStringField(obj, "strokeColor") orelse "#333333",
             .text_content = &.{},
-            .font_size = extractIntField(obj, "\"fontSize\"") orelse 16,
+            .font_size = extractIntField(obj, "fontSize") orelse 16,
             .is_dashed = false,
             .points = undefined,
             .point_count = 0,
@@ -356,109 +357,11 @@ fn parseIntAt(buf: []const u8, pos: *usize) i32 {
     return if (negative) -val else val;
 }
 
-fn findMatchingBrace(json: []const u8) usize {
-    var depth: i32 = 0;
-    var in_string = false;
-    var prev_backslash = false;
-    for (json, 0..) |c, i| {
-        if (in_string) {
-            if (c == '"' and !prev_backslash) {
-                in_string = false;
-            }
-            prev_backslash = (c == '\\' and !prev_backslash);
-        } else {
-            if (c == '"') in_string = true;
-            if (c == '{') depth += 1;
-            if (c == '}') {
-                depth -= 1;
-                if (depth == 0) return i + 1;
-            }
-        }
-    }
-    return json.len;
-}
-
-fn extractStringField(obj: []const u8, field: []const u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i + field.len + 3 < obj.len) : (i += 1) {
-        if (obj[i] == '"' and i + 1 + field.len < obj.len and
-            std.mem.eql(u8, obj[i + 1 .. i + 1 + field.len], field) and
-            obj[i + 1 + field.len] == '"')
-        {
-            var j = i + 1 + field.len + 1;
-            while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
-            if (j < obj.len and obj[j] == '"') {
-                j += 1;
-                const start = j;
-                // Handle escaped quotes in strings
-                while (j < obj.len) {
-                    if (obj[j] == '"' and (j == start or obj[j - 1] != '\\')) break;
-                    j += 1;
-                }
-                return obj[start..j];
-            }
-        }
-    }
-    return null;
-}
-
-fn extractIntField(obj: []const u8, field_with_quotes: []const u8) ?i32 {
-    // field_with_quotes includes the surrounding quotes, e.g. "\"x\""
-    const key_pos = std.mem.indexOf(u8, obj, field_with_quotes) orelse return null;
-    var j = key_pos + field_with_quotes.len;
-
-    while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
-    if (j >= obj.len) return null;
-    if (j + 4 <= obj.len and std.mem.eql(u8, obj[j .. j + 4], "null")) return null;
-
-    var negative = false;
-    if (obj[j] == '-') {
-        negative = true;
-        j += 1;
-    }
-    var val: i32 = 0;
-    while (j < obj.len and obj[j] >= '0' and obj[j] <= '9') : (j += 1) {
-        val = val * 10 + @as(i32, @intCast(obj[j] - '0'));
-    }
-    return if (negative) -val else val;
-}
-
-fn copySlice(dst: []u8, src: []const u8) usize {
-    if (dst.len < src.len) return 0;
-    @memcpy(dst[0..src.len], src);
-    return src.len;
-}
-
-fn writeInt(dst: []u8, val: i32) usize {
-    var buf: [12]u8 = undefined;
-    var v = val;
-    var len: usize = 0;
-
-    if (v < 0) {
-        dst[0] = '-';
-        v = -v;
-        len = 1;
-    }
-
-    if (v == 0) {
-        dst[len] = '0';
-        return len + 1;
-    }
-
-    var digit_count: usize = 0;
-    var tmp = v;
-    while (tmp > 0) : (tmp = @divTrunc(tmp, 10)) {
-        buf[digit_count] = @intCast(@as(u32, @intCast(@rem(tmp, 10))) + '0');
-        digit_count += 1;
-    }
-
-    var ii: usize = 0;
-    while (ii < digit_count) : (ii += 1) {
-        dst[len + ii] = buf[digit_count - 1 - ii];
-    }
-
-    return len + digit_count;
-}
+const findMatchingBrace = util.findMatchingBrace;
+const extractStringField = util.extractStringField;
+const extractIntField = util.extractIntField;
+const copySlice = util.copySlice;
+const writeInt = util.writeInt;
 
 test "renderSvg basic" {
     const elements =
