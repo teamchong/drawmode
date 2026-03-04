@@ -233,6 +233,18 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
         parts.push({ type: "text" as const, text: "Diagram generated successfully" });
       }
 
+      const elements = (result.json as { elements?: unknown[] }).elements ?? [];
+      if (elements.length > 0) {
+        return {
+          content: parts,
+          structuredContent: {
+            type: "resource" as const,
+            resource: { uri: "ui://widget", mimeType: "text/html" },
+            context: { elements, appState: { viewBackgroundColor: "#ffffff" } },
+          },
+        };
+      }
+
       return { content: parts };
     },
   );
