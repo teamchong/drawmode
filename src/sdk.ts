@@ -190,7 +190,7 @@ export class Diagram {
     for (const el of elements) {
       if ((el.type === "rectangle" || el.type === "ellipse") &&
           el.strokeStyle === "dashed" && el.backgroundColor === "transparent" &&
-          (el.opacity as number) <= 50) {
+          (el.opacity as number) <= 70) {
         const elId = el.id as string;
         const labelEl = elements.find(e => e.type === "text" && e.id === `${elId}-label`);
         if (labelEl) groupIds.add(elId);
@@ -210,7 +210,7 @@ export class Diagram {
           e => e.type === "text" && e.id === `${elId}-label`,
         );
         if (elType !== "diamond" && labelEl && el.strokeStyle === "dashed" &&
-            el.backgroundColor === "transparent" && (el.opacity as number) <= 50) {
+            el.backgroundColor === "transparent" && (el.opacity as number) <= 70) {
           d.groups.set(elId, {
             label: (labelEl?.text as string) ?? "",
             children: [], // Reconstructed below after all nodes are loaded
@@ -836,7 +836,7 @@ export class Diagram {
           containerId: arrowId,
           originalText: edge.label,
           autoResize: true,
-          strokeColor: co?.strokeColor ?? toNode.color.stroke,
+          strokeColor: "#1e1e1e",
           backgroundColor: "transparent",
           fillStyle: "solid",
           strokeWidth: 1,
@@ -888,7 +888,7 @@ export class Diagram {
         strokeWidth: 1,
         strokeStyle: "dashed",
         roughness: 0,
-        opacity: 40,
+        opacity: 60,
         angle: 0,
         roundness: { type: 3 },
         boundElements: null,

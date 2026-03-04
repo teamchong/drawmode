@@ -87,6 +87,17 @@ function renderSvgTs(elements: object[]): string {
     } else if (type === "ellipse") {
       const cx = x + w / 2, cy = y + h / 2;
       parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${w / 2}" ry="${h / 2}" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="${sw}"/>`);
+    } else if (type === "diamond") {
+      const cx = x + w / 2, cy = y + h / 2;
+      const pts = `${cx},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`;
+      parts.push(`<polygon points="${pts}" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="${sw}"/>`);
+    } else if (type === "frame") {
+      const name = (el.name as string) ?? "";
+      const dashAttr = ` stroke-dasharray="5,5"`;
+      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#bbb" stroke-width="1" rx="4"${dashAttr}/>`);
+      if (name) {
+        parts.push(`<text x="${x + 8}" y="${y + 14}" font-family="sans-serif" font-size="12" fill="#999">${escapeXml(name)}</text>`);
+      }
     } else if (type === "text") {
       const rawText = String(el.text ?? "");
       const fontSize = (el.fontSize as number) ?? 16;
