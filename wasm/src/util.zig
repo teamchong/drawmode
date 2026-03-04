@@ -7,8 +7,36 @@ pub fn copySlice(dst: []u8, src: []const u8) usize {
     return src.len;
 }
 
+/// Write a JSON-escaped string into a destination buffer. Returns bytes written.
+/// Escapes " and \ characters for safe inclusion in JSON string values.
+pub fn copySliceJsonEscaped(dst: []u8, src: []const u8) usize {
+    var written: usize = 0;
+    for (src) |c| {
+        if (c == '"' or c == '\\') {
+            if (written + 2 > dst.len) break;
+            dst[written] = '\\';
+            dst[written + 1] = c;
+            written += 2;
+        } else {
+            if (written >= dst.len) break;
+            dst[written] = c;
+            written += 1;
+        }
+    }
+    return written;
+}
+
 /// Write an i32 as decimal text into a buffer. Returns bytes written.
 pub fn writeInt(dst: []u8, val: i32) usize {
+    if (dst.len < 12) return 0; // max i32 is 11 chars + sign
+
+    // Handle i32 min separately to avoid overflow on negation
+    if (val == std.math.minInt(i32)) {
+        const literal = "-2147483648";
+        @memcpy(dst[0..literal.len], literal);
+        return literal.len;
+    }
+
     var buf: [12]u8 = undefined;
     var v = val;
     var len: usize = 0;
@@ -65,6 +93,7 @@ pub fn findMatchingBrace(json: []const u8) usize {
 
 /// Extract a string value for a given field name from a JSON object slice.
 /// Handles escaped quotes within string values.
+/// Only matches JSON keys (requires ':' after the quoted name), not values.
 pub fn extractStringField(obj: []const u8, field: []const u8) ?[]const u8 {
     var i: usize = 0;
     while (i + field.len + 3 < obj.len) : (i += 1) {
@@ -72,13 +101,27 @@ pub fn extractStringField(obj: []const u8, field: []const u8) ?[]const u8 {
             std.mem.eql(u8, obj[i + 1 .. i + 1 + field.len], field) and
             obj[i + 1 + field.len] == '"')
         {
+            // Verify this is a key (colon must follow), not a string value
             var j = i + 1 + field.len + 1;
-            while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
+            while (j < obj.len and obj[j] == ' ') : (j += 1) {}
+            if (j >= obj.len or obj[j] != ':') continue;
+            j += 1; // skip colon
+            while (j < obj.len and obj[j] == ' ') : (j += 1) {}
             if (j < obj.len and obj[j] == '"') {
                 j += 1;
                 const start = j;
                 while (j < obj.len) {
-                    if (obj[j] == '"' and (j == start or obj[j - 1] != '\\')) break;
+                    if (obj[j] == '"') {
+                        // Count consecutive preceding backslashes
+                        var bs: usize = 0;
+                        var k = j;
+                        while (k > start and obj[k - 1] == '\\') {
+                            bs += 1;
+                            k -= 1;
+                        }
+                        // Quote is unescaped if preceded by even number of backslashes
+                        if (bs % 2 == 0) break;
+                    }
                     j += 1;
                 }
                 return obj[start..j];
@@ -90,6 +133,7 @@ pub fn extractStringField(obj: []const u8, field: []const u8) ?[]const u8 {
 
 /// Extract an integer value for a given field name from a JSON object slice.
 /// The field parameter should be the bare field name (without quotes).
+/// Only matches JSON keys (requires ':' after the quoted name), not values.
 /// Returns null for missing fields or JSON null values.
 pub fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
     var i: usize = 0;
@@ -98,8 +142,12 @@ pub fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
             std.mem.eql(u8, obj[i + 1 .. i + 1 + field.len], field) and
             obj[i + 1 + field.len] == '"')
         {
+            // Verify this is a key (colon must follow), not a string value
             var j = i + 1 + field.len + 1;
-            while (j < obj.len and (obj[j] == ':' or obj[j] == ' ')) : (j += 1) {}
+            while (j < obj.len and obj[j] == ' ') : (j += 1) {}
+            if (j >= obj.len or obj[j] != ':') continue;
+            j += 1; // skip colon
+            while (j < obj.len and obj[j] == ' ') : (j += 1) {}
             if (j >= obj.len) return null;
             if (j + 4 <= obj.len and std.mem.eql(u8, obj[j .. j + 4], "null")) return null;
 
@@ -108,9 +156,18 @@ pub fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
                 negative = true;
                 j += 1;
             }
+            // Must start with a digit; otherwise value is not numeric
+            if (j >= obj.len or obj[j] < '0' or obj[j] > '9') return null;
             var val: i32 = 0;
             while (j < obj.len and obj[j] >= '0' and obj[j] <= '9') : (j += 1) {
                 val = val * 10 + @as(i32, @intCast(obj[j] - '0'));
+            }
+            // Skip decimal portion for floats (e.g., "100.5" → 100)
+            if (j < obj.len and obj[j] == '.') {
+                j += 1;
+                // Round: check first decimal digit
+                const round_up = (j < obj.len and obj[j] >= '5' and obj[j] <= '9');
+                if (round_up) val += 1;
             }
             return if (negative) -val else val;
         }
@@ -120,6 +177,7 @@ pub fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
 
 /// Extract a string field from a nested JSON object.
 /// E.g., extractNestedStringField(obj, "startBinding", "elementId")
+/// Only matches JSON keys (requires ':' after the quoted name), not values.
 pub fn extractNestedStringField(obj: []const u8, outer: []const u8, inner: []const u8) ?[]const u8 {
     var i: usize = 0;
     while (i + outer.len + 3 < obj.len) : (i += 1) {
@@ -127,7 +185,11 @@ pub fn extractNestedStringField(obj: []const u8, outer: []const u8, inner: []con
             std.mem.eql(u8, obj[i + 1 .. i + 1 + outer.len], outer) and
             obj[i + 1 + outer.len] == '"')
         {
+            // Verify this is a key (colon must follow)
             var j = i + 1 + outer.len + 1;
+            while (j < obj.len and obj[j] == ' ') : (j += 1) {}
+            if (j >= obj.len or obj[j] != ':') continue;
+            j += 1;
             while (j < obj.len and obj[j] != '{') : (j += 1) {}
             if (j >= obj.len) return null;
             const nested_end = findMatchingBrace(obj[j..]) + j;

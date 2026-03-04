@@ -50,14 +50,26 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
             }
         }
 
-        // Check for boundElements containing text
-        if (std.mem.indexOf(u8, obj, "\"boundElements\"") != null and
-            std.mem.indexOf(u8, obj, "\"text\"") != null)
-        {
-            if (id) |id_val| {
-                if (bound_text_count < 256) {
-                    bound_text_ids[bound_text_count] = id_val;
-                    bound_text_count += 1;
+        // Check for boundElements containing text type entry:
+        // Must be an array (not null) and "text" must appear within the boundElements value.
+        // Handles optional whitespace between "boundElements": and [
+        const be_key_start = std.mem.indexOf(u8, obj, "\"boundElements\"");
+        if (be_key_start) |bk_pos| {
+            // Skip past key + any whitespace + colon + whitespace to find '['
+            var bk_scan = bk_pos + "\"boundElements\"".len;
+            while (bk_scan < obj.len and obj[bk_scan] == ' ') : (bk_scan += 1) {}
+            if (bk_scan < obj.len and obj[bk_scan] == ':') {
+                bk_scan += 1;
+                while (bk_scan < obj.len and obj[bk_scan] == ' ') : (bk_scan += 1) {}
+            }
+            const is_array = bk_scan < obj.len and obj[bk_scan] == '[';
+            const after_be = obj[bk_scan..];
+            if (is_array and std.mem.indexOf(u8, after_be, "\"text\"") != null) {
+                if (id) |id_val| {
+                    if (bound_text_count < 256) {
+                        bound_text_ids[bound_text_count] = id_val;
+                        bound_text_count += 1;
+                    }
                 }
             }
         }
@@ -82,9 +94,15 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
                 }
             }
 
-            // Collect shape bounding boxes for overlap check (non-text shapes)
+            // Collect shape bounding boxes for overlap check
+            // Skip group boundaries (dashed stroke + transparent background)
+            const stroke_style = extractStringField(obj, "strokeStyle");
+            const bg = extractStringField(obj, "backgroundColor");
+            const is_group = stroke_style != null and bg != null and
+                std.mem.eql(u8, stroke_style.?, "dashed") and
+                std.mem.eql(u8, bg.?, "transparent");
             if ((std.mem.eql(u8, t, "rectangle") or std.mem.eql(u8, t, "ellipse")) and
-                container == null) // exclude text containers from overlap
+                !is_group)
             {
                 if (shape_rect_count < 256) {
                     shape_rects[shape_rect_count] = .{
@@ -119,7 +137,7 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
         if (!found) {
             if (error_count > 0) written += copySlice(out[written..], ",");
             written += copySlice(out[written..], "{\"type\":\"missing_text\",\"id\":\"");
-            written += copySlice(out[written..], shape_id);
+            written += copySliceJsonEscaped(out[written..], shape_id);
             written += copySlice(out[written..], "\",\"msg\":\"Shape has boundElements but no text element with matching containerId\"}");
             error_count += 1;
         }
@@ -131,7 +149,7 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
             if (std.mem.eql(u8, id_a, id_b)) {
                 if (error_count > 0) written += copySlice(out[written..], ",");
                 written += copySlice(out[written..], "{\"type\":\"duplicate_id\",\"id\":\"");
-                written += copySlice(out[written..], id_a);
+                written += copySliceJsonEscaped(out[written..], id_a);
                 written += copySlice(out[written..], "\",\"msg\":\"Duplicate element ID\"}");
                 error_count += 1;
                 break;
@@ -152,7 +170,7 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
         if (!found) {
             if (error_count > 0) written += copySlice(out[written..], ",");
             written += copySlice(out[written..], "{\"type\":\"dangling_ref\",\"id\":\"");
-            written += copySlice(out[written..], ref);
+            written += copySliceJsonEscaped(out[written..], ref);
             written += copySlice(out[written..], "\",\"msg\":\"Arrow binding references non-existent element\"}");
             error_count += 1;
         }
@@ -178,9 +196,9 @@ pub fn validate(elements_json: []const u8, out: []u8) !usize {
             {
                 if (error_count > 0) written += copySlice(out[written..], ",");
                 written += copySlice(out[written..], "{\"type\":\"overlap\",\"id\":\"");
-                written += copySlice(out[written..], a.id_slice);
+                written += copySliceJsonEscaped(out[written..], a.id_slice);
                 written += copySlice(out[written..], "\",\"msg\":\"Shape overlaps with ");
-                written += copySlice(out[written..], b.id_slice);
+                written += copySliceJsonEscaped(out[written..], b.id_slice);
                 written += copySlice(out[written..], "\"}");
                 error_count += 1;
             }
@@ -207,6 +225,7 @@ const extractStringField = util.extractStringField;
 const extractNestedStringField = util.extractNestedStringField;
 const extractIntField = util.extractIntField;
 const copySlice = util.copySlice;
+const copySliceJsonEscaped = util.copySliceJsonEscaped;
 
 test "validate valid elements" {
     const elements =

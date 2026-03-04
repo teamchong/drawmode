@@ -24,22 +24,22 @@ export async function executeCode(code: string, renderOpts?: RenderOpts): Promis
     // Merge sourceCode into renderOpts so render() can write sidecar
     const mergedOpts: RenderOpts = { ...renderOpts, sourceCode: code };
 
-    // Wrap user code in an async function that returns the result.
-    // Monkey-patch Diagram.prototype.render to merge renderOpts as defaults
-    // so the caller's format/path preferences are respected even when the
-    // LLM calls d.render() without explicit opts.
+    // Create a per-execution Diagram subclass that merges renderOpts as defaults.
+    // This avoids mutating Diagram.prototype which would stack across concurrent requests.
+    class ConfiguredDiagram extends Diagram {
+      override async render(opts?: RenderOpts): Promise<RenderResult> {
+        return super.render({ ...mergedOpts, ...opts });
+      }
+    }
+
     const wrappedCode = `
-      const _origRender = Diagram.prototype.render;
-      Diagram.prototype.render = function(opts) {
-        return _origRender.call(this, { ...renderOpts, ...opts });
-      };
       return (async () => {
         ${code}
       })();
     `;
 
-    const fn = new Function("Diagram", "renderOpts", wrappedCode);
-    const result = await fn(Diagram, mergedOpts);
+    const fn = new Function("Diagram", wrappedCode);
+    const result = await fn(ConfiguredDiagram);
 
     if (!result || typeof result !== "object") {
       return {

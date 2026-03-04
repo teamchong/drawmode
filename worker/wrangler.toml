@@ -1,3 +1,7 @@
 name = "drawmode"
 main = "index.ts"
 compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat", "unsafe_eval"]
+
+[build]
+command = "cd .. && pnpm build"

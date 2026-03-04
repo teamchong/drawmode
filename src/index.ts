@@ -119,32 +119,35 @@ declare class Diagram {
 }
 `;
 
-const server = new McpServer({
-  name: "drawmode",
-  version: "0.1.0",
-});
+let cachedWidgetHtml: string | null = null;
 
-// Register widget HTML as a ui:// resource for MCP Apps
-server.resource(
-  "widget",
-  "ui://widget",
-  { description: "Interactive Excalidraw diagram widget", mimeType: "text/html" },
-  async () => {
-    const widgetPath = join(__dirname, "widget.html");
-    let html: string;
-    try {
-      html = await readFile(widgetPath, "utf-8");
-    } catch {
-      // Fallback: try from src/ (dev mode)
-      html = await readFile(join(__dirname, "..", "src", "widget.html"), "utf-8");
-    }
-    return { contents: [{ uri: "ui://widget", mimeType: "text/html", text: html }] };
-  },
-);
+async function loadWidgetHtml(): Promise<string> {
+  if (cachedWidgetHtml) return cachedWidgetHtml;
+  const widgetPath = join(__dirname, "widget.html");
+  try {
+    cachedWidgetHtml = await readFile(widgetPath, "utf-8");
+  } catch {
+    cachedWidgetHtml = await readFile(join(__dirname, "..", "src", "widget.html"), "utf-8");
+  }
+  return cachedWidgetHtml;
+}
 
-server.tool(
-  "draw",
-  `Generate or edit an Excalidraw architecture diagram by writing TypeScript code.
+/** Register tools and resources on an McpServer instance. */
+function registerHandlers(server: McpServer): void {
+  // Register widget HTML as a ui:// resource for MCP Apps
+  server.resource(
+    "widget",
+    "ui://widget",
+    { description: "Interactive Excalidraw diagram widget", mimeType: "text/html" },
+    async () => {
+      const html = await loadWidgetHtml();
+      return { contents: [{ uri: "ui://widget", mimeType: "text/html", text: html }] };
+    },
+  );
+
+  server.tool(
+    "draw",
+    `Generate or edit an Excalidraw architecture diagram by writing TypeScript code.
 
 You have access to the \`Diagram\` class. Create a new diagram, add shapes, connect them, and return the render result.
 
@@ -183,48 +186,52 @@ return d.render({ path: "diagram.excalidraw" });
 
 Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omitted.
 Use x/y for absolute pixel positioning (bypasses grid).`,
-  {
-    code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
-    format: z.enum(["excalidraw", "url", "png", "svg"]).default("excalidraw").describe("Output format"),
-    path: z.string().optional().describe("File path for .excalidraw output"),
-  },
-  async ({ code, format, path }) => {
-    const { result, error } = await executeCode(code, { format, path });
+    {
+      code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
+      format: z.enum(["excalidraw", "url", "png", "svg"]).default("excalidraw").describe("Output format"),
+      path: z.string().optional().describe("File path for .excalidraw output"),
+    },
+    async ({ code, format, path }) => {
+      const { result, error } = await executeCode(code, { format, path });
 
-    if (error) {
+      if (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error}` }],
+          isError: true,
+        };
+      }
+
+      // Return minimal responses to avoid bloating context:
+      // - url format: just the URL
+      // - file formats (excalidraw/svg/png): just the file path
+      const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+
+      if (format === "url" && result.url) {
+        parts.push({ type: "text" as const, text: result.url });
+      } else if (result.filePath) {
+        parts.push({ type: "text" as const, text: result.filePath });
+      } else if (result.url) {
+        parts.push({ type: "text" as const, text: result.url });
+      }
+
+      // MCP requires at least one content item
+      if (parts.length === 0) {
+        parts.push({ type: "text" as const, text: "Diagram generated successfully" });
+      }
+
+      return { content: parts };
+    },
+  );
+
+  server.tool(
+    "draw_info",
+    "Get information about drawmode capabilities, color presets, and SDK reference.",
+    {},
+    async () => {
       return {
-        content: [{ type: "text" as const, text: `Error: ${error}` }],
-        isError: true,
-      };
-    }
-
-    // Return minimal responses to avoid bloating context:
-    // - url format: just the URL
-    // - file formats (excalidraw/svg/png): just the file path
-    const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
-
-    if (format === "url" && result.url) {
-      parts.push({ type: "text" as const, text: result.url });
-    } else if (result.filePath) {
-      parts.push({ type: "text" as const, text: result.filePath });
-    } else if (result.url) {
-      // Fallback: if no file path but URL exists
-      parts.push({ type: "text" as const, text: result.url });
-    }
-
-    return { content: parts };
-  },
-);
-
-server.tool(
-  "draw_info",
-  "Get information about drawmode capabilities, color presets, and SDK reference.",
-  {},
-  async () => {
-    return {
-      content: [{
-        type: "text" as const,
-        text: `drawmode — Code Mode MCP for Excalidraw diagrams
+        content: [{
+          type: "text" as const,
+          text: `drawmode — Code Mode MCP for Excalidraw diagrams
 
 ## Color Presets
 
@@ -290,10 +297,18 @@ return d.render({ path: "diagram.excalidraw" });
 ${SDK_TYPES}
 
 WASM layout: ${isWasmLoaded() ? "loaded" : "not loaded (using TS grid layout)"}`,
-      }],
-    };
-  },
-);
+        }],
+      };
+    },
+  );
+}
+
+/** Create a new McpServer with all tools/resources registered. */
+function createServer(): McpServer {
+  const server = new McpServer({ name: "drawmode", version: "0.1.0" });
+  registerHandlers(server);
+  return server;
+}
 
 async function main(): Promise<void> {
   // Try to load WASM layout engine (non-fatal if missing)
@@ -303,14 +318,34 @@ async function main(): Promise<void> {
   const useStdio = args.includes("--stdio");
 
   if (useStdio) {
+    // Stdio mode: single client, single server instance
+    const server = createServer();
     const transport = new StdioServerTransport();
     await server.connect(transport);
   } else {
-    // Streamable HTTP mode
+    // Streamable HTTP mode: one server + transport per session
     const { StreamableHTTPServerTransport } = await import(
       "@modelcontextprotocol/sdk/server/streamableHttp.js"
     );
     const http = await import("node:http");
+
+    const sessions = new Map<string, {
+      server: McpServer;
+      transport: InstanceType<typeof StreamableHTTPServerTransport>;
+      lastActivity: number;
+    }>();
+
+    // Cleanup stale sessions every 10 minutes (30-minute TTL)
+    const SESSION_TTL = 30 * 60 * 1000;
+    setInterval(() => {
+      const now = Date.now();
+      for (const [id, session] of sessions) {
+        if (now - session.lastActivity > SESSION_TTL) {
+          session.transport.close?.();
+          sessions.delete(id);
+        }
+      }
+    }, 10 * 60 * 1000).unref();
 
     const httpServer = http.createServer(async (req, res) => {
       if (req.url === "/health") {
@@ -319,10 +354,42 @@ async function main(): Promise<void> {
         return;
       }
 
-      if (req.method === "POST" && req.url === "/mcp") {
-        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
-        await server.connect(transport);
-        await transport.handleRequest(req, res);
+      if (req.url === "/mcp") {
+        // Reuse existing session if session header present
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        if (sessionId && sessions.has(sessionId)) {
+          const session = sessions.get(sessionId)!;
+          session.lastActivity = Date.now();
+          await session.transport.handleRequest(req, res);
+          return;
+        }
+
+        // DELETE without a known session — nothing to clean up
+        if (req.method === "DELETE") {
+          res.writeHead(404);
+          res.end("Session not found");
+          return;
+        }
+
+        if (req.method === "POST") {
+          // New session: create dedicated server + transport pair
+          const sessionServer = createServer();
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => crypto.randomUUID(),
+          });
+          transport.onclose = () => {
+            if (transport.sessionId) sessions.delete(transport.sessionId);
+          };
+          await sessionServer.connect(transport);
+          if (transport.sessionId) {
+            sessions.set(transport.sessionId, { server: sessionServer, transport, lastActivity: Date.now() });
+          }
+          await transport.handleRequest(req, res);
+          return;
+        }
+
+        res.writeHead(405);
+        res.end("Method not allowed");
         return;
       }
 

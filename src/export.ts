@@ -48,6 +48,17 @@ function renderSvgTs(elements: object[]): string {
     if (y < minY) minY = y;
     if (x + w > maxX) maxX = x + w;
     if (y + h > maxY) maxY = y + h;
+    // Expand viewBox for arrow/line points that extend beyond element bounds
+    const points = el.points as number[][] | undefined;
+    if (points) {
+      for (const p of points) {
+        const px = x + p[0], py = y + p[1];
+        if (px < minX) minX = px;
+        if (py < minY) minY = py;
+        if (px > maxX) maxX = px;
+        if (py > maxY) maxY = py;
+      }
+    }
   }
 
   const pad = 40;
@@ -68,12 +79,14 @@ function renderSvgTs(elements: object[]): string {
     const strokeStyle = (el.strokeStyle as string) ?? "solid";
     const isDashed = strokeStyle === "dashed";
 
+    const sw = (el.strokeWidth as number) ?? 2;
+
     if (type === "rectangle") {
       const dashAttr = isDashed ? ` stroke-dasharray="5,5" opacity="0.4"` : "";
-      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${isDashed ? "none" : escapeXml(fill)}" stroke="${isDashed ? "#868e96" : escapeXml(stroke)}" stroke-width="2" rx="8"${dashAttr}/>`);
+      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${isDashed ? "none" : escapeXml(fill)}" stroke="${isDashed ? "#868e96" : escapeXml(stroke)}" stroke-width="${sw}" rx="8"${dashAttr}/>`);
     } else if (type === "ellipse") {
       const cx = x + w / 2, cy = y + h / 2;
-      parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${w / 2}" ry="${h / 2}" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="2"/>`);
+      parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${w / 2}" ry="${h / 2}" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="${sw}"/>`);
     } else if (type === "text") {
       const rawText = String(el.text ?? "");
       const fontSize = (el.fontSize as number) ?? 16;
@@ -95,14 +108,15 @@ function renderSvgTs(elements: object[]): string {
         ).join("");
         parts.push(`<text text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="${fontSize}" fill="${escapeXml(stroke)}">${tspans}</text>`);
       }
-    } else if (type === "arrow") {
+    } else if (type === "line" || type === "arrow") {
       const points = el.points as number[][] | undefined;
       if (points && points.length > 0) {
         const d = points.map((p, i) =>
           `${i === 0 ? "M" : "L"}${x + p[0]} ${y + p[1]}`,
         ).join("");
         const dashAttr = isDashed ? ` stroke-dasharray="5,5"` : "";
-        parts.push(`<path d="${d}" fill="none" stroke="${escapeXml(stroke)}" stroke-width="2" marker-end="url(#arrowhead)"${dashAttr}/>`);
+        const markerAttr = type === "arrow" ? ` marker-end="url(#arrowhead)"` : "";
+        parts.push(`<path d="${d}" fill="none" stroke="${escapeXml(stroke)}" stroke-width="${sw}"${markerAttr}${dashAttr}/>`);
       }
     }
   }

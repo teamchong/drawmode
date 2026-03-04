@@ -5,11 +5,15 @@
  * Layout priority: Graphviz → Zig WASM grid → TS grid (in sdk.ts)
  */
 
-import { readFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+let _dirname: string | undefined;
+async function getDirname(): Promise<string> {
+  if (!_dirname) {
+    const { dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    _dirname = dirname(fileURLToPath(import.meta.url));
+  }
+  return _dirname;
+}
 
 // ── Graphviz layout via @hpcc-js/wasm-graphviz ──
 
@@ -208,15 +212,15 @@ function parseJson0Result(
 }
 
 function escapeDot(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
 }
 
 interface WasmLayoutExports {
   memory: WebAssembly.Memory;
   alloc: (size: number) => number;
   dealloc: (ptr: number, size: number) => void;
+  resetHeap: () => void;
   layoutGraph: (nodesPtr: number, nodesLen: number, edgesPtr: number, edgesLen: number, outPtr: number, outCap: number) => number;
-  routeArrows: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
   validate: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
   renderSvg: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
 }
@@ -224,8 +228,11 @@ interface WasmLayoutExports {
 let wasmInstance: WasmLayoutExports | null = null;
 
 export async function loadWasm(wasmPath?: string): Promise<void> {
-  const path = wasmPath ?? join(__dirname, "..", "wasm", "zig-out", "bin", "drawmode.wasm");
   try {
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const dir = await getDirname();
+    const path = wasmPath ?? join(dir, "..", "wasm", "zig-out", "bin", "drawmode.wasm");
     const bytes = await readFile(path);
     const { instance } = await WebAssembly.instantiate(bytes, {});
     wasmInstance = instance.exports as unknown as WasmLayoutExports;
@@ -258,19 +265,19 @@ function callWasm(
   outCap: number,
 ): string | null {
   if (!wasmInstance) return null;
+  wasmInstance.resetHeap();
   const inBytes = new TextEncoder().encode(inputJson);
   const inPtr = writeToWasm(inBytes);
   const outPtr = wasmInstance.alloc(outCap);
   const written = fn(inPtr, inBytes.byteLength, outPtr, outCap);
   const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
-  wasmInstance.dealloc(inPtr, inBytes.byteLength);
-  wasmInstance.dealloc(outPtr, outCap);
   return result;
 }
 
 /** Run WASM auto-layout on nodes and edges. */
 export function layoutGraph(nodesJson: string, edgesJson: string): string | null {
   if (!wasmInstance) return null;
+  wasmInstance.resetHeap();
   const nodesBytes = new TextEncoder().encode(nodesJson);
   const edgesBytes = new TextEncoder().encode(edgesJson);
   const outCap = 64 * 1024;
@@ -278,17 +285,7 @@ export function layoutGraph(nodesJson: string, edgesJson: string): string | null
   const edgesPtr = writeToWasm(edgesBytes);
   const outPtr = wasmInstance.alloc(outCap);
   const written = wasmInstance.layoutGraph(nodesPtr, nodesBytes.byteLength, edgesPtr, edgesBytes.byteLength, outPtr, outCap);
-  const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
-  wasmInstance.dealloc(nodesPtr, nodesBytes.byteLength);
-  wasmInstance.dealloc(edgesPtr, edgesBytes.byteLength);
-  wasmInstance.dealloc(outPtr, outCap);
-  return result;
-}
-
-/** Run WASM arrow routing on elements. */
-export function routeArrows(elementsJson: string): string | null {
-  if (!wasmInstance) return null;
-  return callWasm(wasmInstance.routeArrows.bind(wasmInstance), elementsJson, 128 * 1024);
+  return written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
 }
 
 /** Validate Excalidraw elements. Returns validation errors JSON, or null. */
@@ -300,5 +297,5 @@ export function validateElements(elementsJson: string): string | null {
 /** Render Excalidraw elements to SVG using WASM. */
 export function renderSvg(elementsJson: string): string | null {
   if (!wasmInstance) return null;
-  return callWasm(wasmInstance.renderSvg.bind(wasmInstance), elementsJson, 256 * 1024);
+  return callWasm(wasmInstance.renderSvg.bind(wasmInstance), elementsJson, 512 * 1024);
 }

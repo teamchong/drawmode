@@ -6,3 +6,12 @@ zig-cache/
 *.wasm
 !wasm/src/
 .DS_Store
+
+# Test/debug artifacts
+diagram.*
+test-output.*
+test.svg
+
+# Environment
+.env
+.env.local

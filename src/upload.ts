@@ -46,23 +46,14 @@ function concatBuffers(...buffers: Uint8Array[]): Uint8Array {
 }
 
 export async function uploadToExcalidraw(jsonString: string): Promise<string> {
-  // 1. Generate key and export as JWK
+  // 1. Generate key and export as JWK to get the base64url key for the URL
   const cryptoKey = await crypto.subtle.generateKey(
     { name: "AES-GCM", length: 128 },
-    true, // extractable
+    true, // extractable (needed for JWK export)
     ["encrypt"],
   );
   const jwk = await crypto.subtle.exportKey("jwk", cryptoKey);
   const encryptionKey = jwk.k!; // base64url-encoded raw key
-
-  // Re-import for encryption (non-extractable)
-  const importedKey = await crypto.subtle.importKey(
-    "jwk",
-    { alg: "A128GCM", ext: true, k: encryptionKey, key_ops: ["encrypt", "decrypt"], kty: "oct" },
-    { name: "AES-GCM", length: 128 },
-    false,
-    ["encrypt"],
-  );
 
   // 2. Build inner payload: concatBuffers(contentsMetadata, dataBuffer)
   const contentsMetadata = new TextEncoder().encode(JSON.stringify(null));
@@ -74,7 +65,7 @@ export async function uploadToExcalidraw(jsonString: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
   const encryptedBuffer = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
-    importedKey,
+    cryptoKey,
     compressed,
   );
 

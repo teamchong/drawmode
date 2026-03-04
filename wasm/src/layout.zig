@@ -98,6 +98,10 @@ fn assignLayers(nodes: *[128]Node, count: usize, edges: *[256]Edge, edge_count: 
     var total_assigned: usize = 0;
 
     while (total_assigned < count) : (layer += 1) {
+        // Track nodes newly assigned in this layer
+        var newly_assigned: [128]usize = undefined;
+        var new_count: usize = 0;
+
         var col: i32 = 0;
         for (0..count) |i| {
             if (!assigned[i] and in_degree[i] == 0) {
@@ -105,26 +109,26 @@ fn assignLayers(nodes: *[128]Node, count: usize, edges: *[256]Edge, edge_count: 
                 if (nodes[i].col == null) nodes[i].col = col;
                 assigned[i] = true;
                 total_assigned += 1;
+                newly_assigned[new_count] = i;
+                new_count += 1;
                 col += 1;
             }
         }
 
-        // Decrease in-degree for successors
-        for (0..count) |i| {
-            if (assigned[i]) {
-                for (edges[0..edge_count]) |e| {
-                    if (std.mem.eql(u8, e.from_slice, nodes[i].id_slice)) {
-                        const to_idx = findNodeIdx(nodes[0..count], e.to_slice);
-                        if (to_idx) |idx| {
-                            if (in_degree[idx] > 0) in_degree[idx] -= 1;
-                        }
+        // Safety: break if no progress (cyclic graph)
+        if (new_count == 0) break;
+
+        // Decrease in-degree only for newly assigned nodes' successors
+        for (newly_assigned[0..new_count]) |i| {
+            for (edges[0..edge_count]) |e| {
+                if (std.mem.eql(u8, e.from_slice, nodes[i].id_slice)) {
+                    const to_idx = findNodeIdx(nodes[0..count], e.to_slice);
+                    if (to_idx) |idx| {
+                        if (in_degree[idx] > 0) in_degree[idx] -= 1;
                     }
                 }
             }
         }
-
-        // Safety: break if no progress (cyclic graph)
-        if (col == 0) break;
     }
 }
 

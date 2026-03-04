@@ -23,11 +23,8 @@ const ROW_SPACING = 220;
 const BASE_X = 100;
 const BASE_Y = 100;
 
-let idCounter = 0;
 const SESSION_SEED = Date.now().toString(36);
-function nextId(prefix: string): string {
-  return `${prefix}_${++idCounter}_${SESSION_SEED}`;
-}
+let globalIdCounter = 0;
 
 function randSeed(): number {
   return Math.floor(Math.random() * 2000000000);
@@ -39,6 +36,11 @@ export class Diagram {
   private groups = new Map<string, { label: string; children: string[] }>();
   /** Passthrough elements from fromFile() — re-emitted unchanged */
   private passthrough: object[] = [];
+  private idCounter = 0;
+
+  private nextId(prefix: string): string {
+    return `${prefix}_${++this.idCounter}_${SESSION_SEED}_${++globalIdCounter}`;
+  }
 
   /** Add a rectangle to the diagram. Returns the element ID. */
   addBox(label: string, opts?: ShapeOpts): string {
@@ -51,7 +53,7 @@ export class Diagram {
   }
 
   private addShape(prefix: string, type: GraphNode["type"], label: string, opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): string {
-    const id = nextId(prefix);
+    const id = this.nextId(prefix);
     const extraLines = label.split("\n").length - 1;
     this.nodes.set(id, {
       id, label, type,
@@ -72,14 +74,17 @@ export class Diagram {
     fontSize?: number; fontFamily?: FontFamily;
     color?: ColorPreset; strokeColor?: string;
   }): string {
-    const id = nextId("txt");
+    const id = this.nextId("txt");
     const preset = opts?.color ?? "backend";
     const paletteColor = COLOR_PALETTE[preset];
     const strokeColor = opts?.strokeColor ?? paletteColor.stroke;
+    const fontSize = opts?.fontSize ?? 16;
+    const textLines = text.split("\n");
+    const maxLineLen = textLines.reduce((max, l) => Math.max(max, l.length), 0);
     this.nodes.set(id, {
       id, label: text, type: "text",
-      width: text.length * (opts?.fontSize ?? 16) * 0.6 + 16,
-      height: (opts?.fontSize ?? 16) + 8,
+      width: maxLineLen * fontSize * 0.6 + 16,
+      height: textLines.length * (fontSize * 1.5) + 8,
       color: { background: "transparent", stroke: strokeColor },
       opts: { x: opts?.x, y: opts?.y, fontSize: opts?.fontSize, fontFamily: opts?.fontFamily },
       absX: opts?.x,
@@ -92,14 +97,16 @@ export class Diagram {
   addLine(points: [number, number][], opts?: {
     strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle;
   }): string {
-    const id = nextId("line");
-    // Compute bounding box
-    const xs = points.map(p => p[0]);
-    const ys = points.map(p => p[1]);
-    const minX = Math.min(...xs);
-    const minY = Math.min(...ys);
-    const maxX = Math.max(...xs);
-    const maxY = Math.max(...ys);
+    if (points.length < 2) throw new Error("addLine requires at least two points");
+    const id = this.nextId("line");
+    // Compute bounding box in single pass
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [px, py] of points) {
+      if (px < minX) minX = px;
+      if (py < minY) minY = py;
+      if (px > maxX) maxX = px;
+      if (py > maxY) maxY = py;
+    }
     this.nodes.set(id, {
       id, label: "", type: "line",
       width: maxX - minX || 1,
@@ -115,7 +122,7 @@ export class Diagram {
 
   /** Group elements together with a dashed boundary and label. */
   addGroup(label: string, children: string[]): string {
-    const id = nextId("grp");
+    const id = this.nextId("grp");
     this.groups.set(id, { label, children });
     return id;
   }
@@ -132,13 +139,13 @@ export class Diagram {
   // ── Editing / Query Methods ──
 
   /** Load an existing .excalidraw file for editing. */
-  static async fromFile(path: string): Promise<Diagram> {
+  static async fromFile(this: new () => Diagram, path: string): Promise<Diagram> {
     const { readFile } = await import("node:fs/promises");
     const raw = await readFile(path, "utf-8");
     const json = JSON.parse(raw);
     const elements: Record<string, unknown>[] = json.elements ?? [];
 
-    const d = new Diagram();
+    const d = new this();
 
     // Index text elements by containerId for label lookup
     const textByContainer = new Map<string, Record<string, unknown>>();
@@ -148,21 +155,37 @@ export class Diagram {
       }
     }
 
+    // Pre-detect group IDs so label text nodes can be skipped regardless of element order
+    const groupIds = new Set<string>();
+    for (const el of elements) {
+      if ((el.type === "rectangle" || el.type === "ellipse") &&
+          el.strokeStyle === "dashed" && el.backgroundColor === "transparent" &&
+          (el.opacity as number) <= 50) {
+        const elId = el.id as string;
+        const labelEl = elements.find(e => e.type === "text" && e.id === `${elId}-label`);
+        if (labelEl) groupIds.add(elId);
+      }
+    }
+
     // Reconstruct nodes from shapes
     for (const el of elements) {
       const elType = el.type as string;
       const elId = el.id as string;
 
       if (elType === "rectangle" || elType === "ellipse") {
-        // Check if this is a group boundary (dashed + low opacity)
-        if (el.strokeStyle === "dashed" && (el.opacity as number) <= 50) {
-          const labelEl = elements.find(
-            e => e.type === "text" && e.id === `${elId}-label`,
-          );
+        // Detect group boundaries: must have companion "-label" text, dashed stroke,
+        // transparent background, and low opacity. The "-label" check distinguishes
+        // drawmode groups from user shapes that happen to be dashed + low opacity.
+        const labelEl = elements.find(
+          e => e.type === "text" && e.id === `${elId}-label`,
+        );
+        if (labelEl && el.strokeStyle === "dashed" &&
+            el.backgroundColor === "transparent" && (el.opacity as number) <= 50) {
           d.groups.set(elId, {
             label: (labelEl?.text as string) ?? "",
-            children: [], // We can't perfectly reconstruct children from JSON
-          });
+            children: [], // Reconstructed below after all nodes are loaded
+            _bounds: { x: el.x as number, y: el.y as number, w: el.width as number, h: el.height as number },
+          } as { label: string; children: string[]; _bounds?: { x: number; y: number; w: number; h: number } });
           continue;
         }
 
@@ -223,6 +246,9 @@ export class Diagram {
           d.passthrough.push(el);
         }
       } else if (elType === "text" && !el.containerId) {
+        // Skip group label text elements (detected in pre-scan above)
+        if (elId.endsWith("-label") && groupIds.has(elId.replace(/-label$/, ""))) continue;
+
         // Standalone text — add as text node
         d.nodes.set(elId, {
           id: elId,
@@ -241,6 +267,20 @@ export class Diagram {
         // Unknown element type — passthrough
         d.passthrough.push(el);
       }
+    }
+
+    // Reconstruct group children: nodes whose position falls within group bounds
+    for (const [groupId, group] of d.groups) {
+      const gb = (group as { _bounds?: { x: number; y: number; w: number; h: number } })._bounds;
+      if (!gb) continue;
+      for (const node of d.nodes.values()) {
+        const nx = node.absX ?? 0;
+        const ny = node.absY ?? 0;
+        if (nx >= gb.x && ny >= gb.y && nx + node.width <= gb.x + gb.w && ny + node.height <= gb.y + gb.h) {
+          group.children.push(node.id);
+        }
+      }
+      delete (group as Record<string, unknown>)._bounds;
     }
 
     return d;
@@ -290,8 +330,9 @@ export class Diagram {
       node.color = { ...node.color, background: update.backgroundColor };
     }
 
-    // Merge remaining opts
-    node.opts = { ...node.opts, ...update };
+    // Merge remaining opts (exclude non-ShapeOpts fields)
+    const { label: _, ...shapeUpdates } = update;
+    node.opts = { ...node.opts, ...shapeUpdates };
   }
 
   /** Remove a node and all its connected edges. */
@@ -321,7 +362,9 @@ export class Diagram {
           const errors = JSON.parse(errorsJson);
           if (Array.isArray(errors) && errors.length > 0) {
             for (const err of errors) {
-              process.stderr.write(`[drawmode] validation warning: ${err.msg} (${err.id})\n`);
+              if (typeof globalThis.process !== "undefined") {
+                process.stderr.write(`[drawmode] validation warning: ${err.msg} (${err.id})\n`);
+              }
             }
           }
         } catch {
@@ -341,17 +384,20 @@ export class Diagram {
 
     const result: RenderResult = { json: excalidrawJson };
     const format = opts?.format ?? "excalidraw";
-    const { writeFile } = await import("node:fs/promises");
+
+    // Lazily import writeFile only when a file-writing format is used
+    const needsFs = format === "excalidraw" || format === "svg" || format === "png";
+    const writeFile = needsFs ? (await import("node:fs/promises")).writeFile : undefined;
 
     if (format === "excalidraw") {
       const path = opts?.path ?? "diagram.excalidraw";
-      await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
+      await writeFile!(path, JSON.stringify(excalidrawJson, null, 2));
       result.filePath = path;
 
       // Write sidecar .drawmode.ts if source code provided
       if (opts?.sourceCode && path.endsWith(".excalidraw")) {
         const sidecarPath = path.replace(/\.excalidraw$/, ".drawmode.ts");
-        await writeFile(sidecarPath, opts.sourceCode);
+        await writeFile!(sidecarPath, opts.sourceCode);
       }
     }
 
@@ -364,7 +410,7 @@ export class Diagram {
       const { exportToSvg } = await import("./export.js");
       result.svg = exportToSvg(elements);
       const path = opts?.path ?? "diagram.svg";
-      await writeFile(path, result.svg);
+      await writeFile!(path, result.svg);
       result.filePath = path;
     }
 
@@ -372,7 +418,7 @@ export class Diagram {
       const { exportToPng } = await import("./export.js");
       result.png = await exportToPng(elements);
       const path = opts?.path ?? "diagram.png";
-      await writeFile(path, result.png);
+      await writeFile!(path, result.png);
       result.filePath = path;
     }
 
@@ -383,6 +429,20 @@ export class Diagram {
   private async buildElements(): Promise<object[]> {
     const elements: object[] = [];
     const { positioned, edgeRoutes } = await this.layoutNodes();
+
+    // Pre-compute arrow bindings per shape: arrowId will be assigned later,
+    // so we use edge index to track and fill in the ID after arrow creation.
+    const arrowBindingsPerNode = new Map<string, { type: "arrow"; id: string }[]>();
+    const arrowIds: string[] = [];
+    for (let i = 0; i < this.edges.length; i++) {
+      const edge = this.edges[i];
+      const arrowId = this.nextId("arr");
+      arrowIds.push(arrowId);
+      for (const nodeId of [edge.from, edge.to]) {
+        if (!arrowBindingsPerNode.has(nodeId)) arrowBindingsPerNode.set(nodeId, []);
+        arrowBindingsPerNode.get(nodeId)!.push({ type: "arrow", id: arrowId });
+      }
+    }
 
     // Create shape + bound text for each node
     for (const node of positioned.values()) {
@@ -468,7 +528,10 @@ export class Diagram {
         angle: 0,
         strokeStyle: o?.strokeStyle ?? "solid",
         roundness: o?.roundness !== undefined ? o.roundness : { type: 3 },
-        boundElements: [{ type: "text", id: textId }],
+        boundElements: [
+          { type: "text", id: textId },
+          ...(arrowBindingsPerNode.get(node.id) ?? []),
+        ],
         groupIds: [],
         frameId: null,
         isDeleted: false,
@@ -520,18 +583,22 @@ export class Diagram {
     const needsStagger = !edgeRoutes || this.edges.some(e => !edgeRoutes.has(`${e.from}->${e.to}`));
     if (needsStagger) {
       edgeCounts = new Map();
+      // Only count non-Graphviz-routed edges for stagger computation
       for (const edge of this.edges) {
-        edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
+        if (!edgeRoutes?.has(`${edge.from}->${edge.to}`)) {
+          edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
+        }
       }
     }
 
-    for (const edge of this.edges) {
+    for (let ei = 0; ei < this.edges.length; ei++) {
+      const edge = this.edges[ei];
       const fromNode = positioned.get(edge.from);
       const toNode = positioned.get(edge.to);
       if (!fromNode || !toNode) continue;
 
       const co = edge.opts;
-      const arrowId = nextId("arr");
+      const arrowId = arrowIds[ei];
       const isElbowed = co?.elbowed !== false; // default true
 
       // Check for Graphviz-computed edge route (with index for multi-edges)
@@ -596,7 +663,7 @@ export class Diagram {
       const boundsWidth = bMaxX - bMinX;
       const boundsHeight = bMaxY - bMinY;
 
-      const labelTextId = edge.label ? nextId("arrlbl") : undefined;
+      const labelTextId = edge.label ? this.nextId("arrlbl") : undefined;
 
       elements.push({
         id: arrowId,
@@ -612,7 +679,7 @@ export class Diagram {
         strokeWidth: co?.strokeWidth ?? 2,
         strokeStyle: edge.style,
         roughness: co?.roughness ?? 0,
-        roundness: isElbowed ? null : undefined,
+        roundness: isElbowed ? null : { type: 2 },
         elbowed: isElbowed,
         opacity: co?.opacity ?? 100,
         angle: 0,
@@ -695,10 +762,17 @@ export class Diagram {
       if (childNodes.length === 0) continue;
 
       const padding = 30;
-      const minX = Math.min(...childNodes.map(n => n.x!)) - padding;
-      const minY = Math.min(...childNodes.map(n => n.y!)) - padding - 20;
-      const maxX = Math.max(...childNodes.map(n => n.x! + n.width)) + padding;
-      const maxY = Math.max(...childNodes.map(n => n.y! + n.height)) + padding;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of childNodes) {
+        if (n.x! < minX) minX = n.x!;
+        if (n.y! < minY) minY = n.y!;
+        if (n.x! + n.width > maxX) maxX = n.x! + n.width;
+        if (n.y! + n.height > maxY) maxY = n.y! + n.height;
+      }
+      minX -= padding;
+      minY -= padding + 20;
+      maxX += padding;
+      maxY += padding;
 
       elements.push({
         id: groupId,
@@ -827,9 +901,19 @@ export class Diagram {
         result.set(pos.id, { ...node, x: node.absX ?? pos.x, y: node.absY ?? pos.y });
       }
     }
+    // Place unpositioned nodes (text, line) below the positioned graph
+    let maxBottom = BASE_Y;
+    for (const n of result.values()) {
+      const bottom = (n.y ?? 0) + n.height;
+      if (bottom > maxBottom) maxBottom = bottom;
+    }
+    let offsetX = BASE_X;
     for (const node of this.nodes.values()) {
       if (!result.has(node.id)) {
-        result.set(node.id, { ...node, x: node.absX ?? BASE_X, y: node.absY ?? BASE_Y });
+        const x = node.absX ?? offsetX;
+        const y = node.absY ?? (maxBottom + ROW_SPACING);
+        result.set(node.id, { ...node, x, y });
+        if (node.absX === undefined) offsetX += node.width + 40;
       }
     }
     return result;
@@ -915,7 +999,7 @@ function calculateArrowEndpoints(
   let sourceEdge: string, targetEdge: string;
   let sourcePoint: Point, targetPoint: Point;
 
-  if (hasVerticalGap ? (Math.abs(dy) > 0) : (Math.abs(dy) > Math.abs(dx))) {
+  if (hasVerticalGap || (!hasHorizontalGap && Math.abs(dy) > Math.abs(dx))) {
     // Vertical relationship
     if (dy > 0) {
       sourceEdge = "bottom"; targetEdge = "top";

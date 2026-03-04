@@ -36,14 +36,16 @@ pub fn routeArrows(elements_json: []const u8, out: []u8) !usize {
     // For each arrow, calculate endpoints
     var written: usize = 0;
     written += copySlice(out[written..], "[");
+    var emitted: usize = 0;
 
-    for (arrow_starts[0..arrow_count], 0..) |arrow, i| {
-        if (i > 0) written += copySlice(out[written..], ",");
-
+    for (arrow_starts[0..arrow_count]) |arrow| {
         const from_shape = findShape(shapes[0..shape_count], arrow.from_id);
         const to_shape = findShape(shapes[0..shape_count], arrow.to_id);
 
         if (from_shape == null or to_shape == null) continue;
+
+        if (emitted > 0) written += copySlice(out[written..], ",");
+        emitted += 1;
 
         const src = from_shape.?;
         const tgt = to_shape.?;

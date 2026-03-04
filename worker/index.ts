@@ -9,10 +9,8 @@
  * Note: No WASM support in Worker — uses TS-only grid layout via the SDK.
  */
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 import { Diagram } from "../src/sdk.js";
-import type { RenderOpts } from "../src/types.js";
+import type { RenderOpts, RenderResult } from "../src/types.js";
 
 const SDK_TYPES = `
 declare class Diagram {
@@ -33,10 +31,17 @@ declare class Diagram {
 
 async function executeCodeInWorker(code: string, renderOpts: RenderOpts): Promise<{ result: { json: object; url?: string; filePath?: string }; error?: string }> {
   try {
-    const origRender = Diagram.prototype.render;
-    Diagram.prototype.render = function(opts?: RenderOpts) {
-      return origRender.call(this, { ...renderOpts, ...opts });
-    };
+    // Per-execution subclass avoids mutating Diagram.prototype across concurrent requests.
+    // Worker has no filesystem — force file-writing formats to "url".
+    class ConfiguredDiagram extends Diagram {
+      override async render(opts?: RenderOpts): Promise<RenderResult> {
+        const merged = { ...renderOpts, ...opts };
+        if (merged.format === "excalidraw" || merged.format === "svg" || merged.format === "png") {
+          merged.format = "url";
+        }
+        return super.render(merged);
+      }
+    }
 
     const wrappedCode = `
       return (async () => {
@@ -45,10 +50,7 @@ async function executeCodeInWorker(code: string, renderOpts: RenderOpts): Promis
     `;
 
     const fn = new Function("Diagram", wrappedCode);
-    const result = await fn(Diagram);
-
-    // Restore prototype
-    Diagram.prototype.render = origRender;
+    const result = await fn(ConfiguredDiagram);
 
     if (!result || typeof result !== "object") {
       return {
@@ -64,100 +66,7 @@ async function executeCodeInWorker(code: string, renderOpts: RenderOpts): Promis
   }
 }
 
-function createServer(): McpServer {
-  const server = new McpServer({
-    name: "drawmode",
-    version: "0.1.0",
-  });
 
-  server.tool(
-    "draw",
-    `Generate an Excalidraw architecture diagram by writing TypeScript code.
-
-You have access to the \`Diagram\` class. Create a new diagram, add shapes, connect them, and return the render result.
-
-TypeScript types available:
-${SDK_TYPES}
-
-Example:
-\`\`\`typescript
-const d = new Diagram();
-const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
-const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
-d.connect(api, db, "queries");
-return d.render({ format: "url" });
-\`\`\`
-
-Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omitted.
-Running in Cloudflare Worker mode — TS grid layout (no WASM). Formats: "excalidraw" and "url" only.`,
-    {
-      code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
-      format: z.enum(["excalidraw", "url"]).default("excalidraw").describe("Output format"),
-    },
-    async ({ code, format }) => {
-      const { result, error } = await executeCodeInWorker(code, { format });
-
-      if (error) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${error}` }],
-          isError: true,
-        };
-      }
-
-      const parts: { type: "text"; text: string }[] = [];
-
-      if (result.url) {
-        parts.push({ type: "text" as const, text: `Excalidraw URL: ${result.url}` });
-      }
-
-      const elementCount = Array.isArray((result.json as { elements?: unknown[] }).elements)
-        ? (result.json as { elements: unknown[] }).elements.length
-        : 0;
-      parts.push({ type: "text" as const, text: `Generated ${elementCount} elements` });
-
-      if (format === "excalidraw") {
-        parts.push({ type: "text" as const, text: JSON.stringify(result.json, null, 2) });
-      }
-
-      return { content: parts };
-    },
-  );
-
-  server.tool(
-    "draw_info",
-    "Get information about drawmode capabilities, color presets, and SDK reference.",
-    {},
-    async () => {
-      return {
-        content: [{
-          type: "text" as const,
-          text: `drawmode — Code Mode MCP for Excalidraw diagrams (Worker mode)
-
-## Color Presets
-| Preset        | Use for                    |
-|---------------|----------------------------|
-| frontend      | UI, browser, React         |
-| backend       | APIs, services, servers    |
-| database      | Postgres, MySQL, DynamoDB  |
-| storage       | S3, R2, blob storage       |
-| ai            | ML models, embeddings      |
-| external      | Third-party APIs           |
-| orchestration | K8s, Docker, schedulers    |
-| queue         | Kafka, SQS, RabbitMQ       |
-| cache         | Redis, Memcached           |
-| users         | End users, actors          |
-
-## SDK Reference
-${SDK_TYPES}
-
-WASM layout: not available (Worker mode — using TS grid layout)`,
-        }],
-      };
-    },
-  );
-
-  return server;
-}
 
 export default {
   async fetch(request: Request): Promise<Response> {
@@ -167,11 +76,9 @@ export default {
       return Response.json({ status: "ok", service: "drawmode", mode: "worker" });
     }
 
-    // MCP endpoint — create a fresh server per request (stateless)
+    // MCP endpoint — stateless JSON-RPC handler
     if (request.method === "POST" && url.pathname === "/mcp") {
       try {
-        const server = createServer();
-
         // Parse the JSON-RPC request from the body
         const body = await request.json() as { method: string; id?: string | number; params?: Record<string, unknown> };
 
@@ -234,7 +141,7 @@ export default {
 
           if (toolName === "draw") {
             const code = args.code as string;
-            const format = (args.format as "excalidraw" | "url") ?? "excalidraw";
+            const format = (args.format as "excalidraw" | "url") ?? "url";
             const { result, error } = await executeCodeInWorker(code, { format });
 
             if (error) {
@@ -252,15 +159,12 @@ export default {
 
             const parts: { type: "text"; text: string }[] = [];
             if (result.url) {
-              parts.push({ type: "text", text: `Excalidraw URL: ${result.url}` });
+              parts.push({ type: "text", text: result.url });
             }
             const elementCount = Array.isArray((result.json as { elements?: unknown[] }).elements)
               ? (result.json as { elements: unknown[] }).elements.length
               : 0;
             parts.push({ type: "text", text: `Generated ${elementCount} elements` });
-            if (format === "excalidraw") {
-              parts.push({ type: "text", text: JSON.stringify(result.json, null, 2) });
-            }
 
             return Response.json({
               jsonrpc: "2.0",
@@ -272,8 +176,6 @@ export default {
           }
 
           if (toolName === "draw_info") {
-            // Re-use the server's tool handler by calling it directly
-            void server; // server created but we handle inline for stateless
             return Response.json({
               jsonrpc: "2.0",
               id: body.id,
@@ -295,6 +197,11 @@ export default {
           }, {
             headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
           });
+        }
+
+        // JSON-RPC notifications (no id) should be silently accepted
+        if (body.id === undefined || body.id === null) {
+          return new Response(null, { status: 204 });
         }
 
         return Response.json({

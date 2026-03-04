@@ -9,7 +9,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc && cp src/widget.html dist/widget.html",
+    "build": "{ cd wasm && zig build && cd ..; } || echo 'Zig not available, skipping WASM build'; tsc && cp src/widget.html dist/widget.html",
+    "build:wasm": "cd wasm && zig build",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
@@ -22,14 +23,19 @@
     "architecture",
     "wasm"
   ],
+  "files": [
+    "dist",
+    "!dist/*.test.*",
+    "wasm/zig-out/bin/drawmode.wasm",
+    "README.md",
+    "LICENSE"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
-    "@cloudflare/codemode": "^0.1.0",
     "@hpcc-js/wasm-graphviz": "^1.21.0",
-    "@modelcontextprotocol/ext-apps": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.25.0",
     "@resvg/resvg-js": "^2.6.0",
     "zod": "^3.23.0"
