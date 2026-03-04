@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     });
     wasm.entry = .disabled;
     wasm.rdynamic = true;
+    wasm.export_memory = true;
 
     const install_wasm = b.addInstallArtifact(wasm, .{});
     b.getInstallStep().dependOn(&install_wasm.step);

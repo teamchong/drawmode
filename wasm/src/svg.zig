@@ -377,7 +377,7 @@ fn parseIntAt(buf: []const u8, pos: *usize) i32 {
     }
     var val: i32 = 0;
     while (pos.* < buf.len and buf[pos.*] >= '0' and buf[pos.*] <= '9') {
-        val = val * 10 + @as(i32, @intCast(buf[pos.*] - '0'));
+        val = val *| 10 +| @as(i32, @intCast(buf[pos.*] - '0'));
         pos.* += 1;
     }
     // Skip decimal portion for float values (e.g., 100.5 → 100)

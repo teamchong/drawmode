@@ -1,10 +1,11 @@
 const std = @import("std");
 
 /// Copy a slice into a destination buffer. Returns bytes written.
+/// Writes as much as fits when dst is smaller than src (partial write).
 pub fn copySlice(dst: []u8, src: []const u8) usize {
-    if (dst.len < src.len) return 0;
-    @memcpy(dst[0..src.len], src);
-    return src.len;
+    const n = @min(dst.len, src.len);
+    if (n > 0) @memcpy(dst[0..n], src[0..n]);
+    return n;
 }
 
 /// Write a JSON-escaped string into a destination buffer. Returns bytes written.
@@ -160,7 +161,7 @@ pub fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
             if (j >= obj.len or obj[j] < '0' or obj[j] > '9') return null;
             var val: i32 = 0;
             while (j < obj.len and obj[j] >= '0' and obj[j] <= '9') : (j += 1) {
-                val = val * 10 + @as(i32, @intCast(obj[j] - '0'));
+                val = val *| 10 +| @as(i32, @intCast(obj[j] - '0'));
             }
             // Skip decimal portion for floats (e.g., "100.5" → 100)
             if (j < obj.len and obj[j] == '.') {
