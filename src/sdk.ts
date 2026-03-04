@@ -23,6 +23,13 @@ const ROW_SPACING = 220;
 const BASE_X = 100;
 const BASE_Y = 100;
 
+/** Excalidraw lineHeight per font family: 1=Virgil→1.25, 2=Helvetica→1.15, 3=Cascadia→1.2 */
+function getLineHeight(fontFamily: FontFamily): number {
+  if (fontFamily === 2) return 1.15;
+  if (fontFamily === 3) return 1.2;
+  return 1.25; // Virgil (1) and default
+}
+
 const SESSION_SEED = Date.now().toString(36);
 let globalIdCounter = 0;
 
@@ -450,6 +457,7 @@ export class Diagram {
 
       // Standalone text node
       if (node.type === "text") {
+        const ff: FontFamily = o?.fontFamily ?? 1;
         elements.push({
           id: node.id,
           type: "text",
@@ -458,7 +466,8 @@ export class Diagram {
           height: node.height,
           text: node.label,
           fontSize: o?.fontSize ?? 16,
-          fontFamily: o?.fontFamily ?? 1,
+          fontFamily: ff,
+          lineHeight: getLineHeight(ff),
           textAlign: o?.textAlign ?? "left",
           verticalAlign: o?.verticalAlign ?? "top",
           containerId: null,
@@ -475,6 +484,9 @@ export class Diagram {
           frameId: null,
           isDeleted: false,
           boundElements: null,
+          updated: Date.now(),
+          locked: false,
+          link: null,
           seed: randSeed(),
           version: 1,
           versionNonce: randSeed(),
@@ -500,10 +512,17 @@ export class Diagram {
           opacity: o?.opacity ?? 100,
           angle: 0,
           roundness: null,
+          startBinding: null,
+          endBinding: null,
+          startArrowhead: null,
+          endArrowhead: null,
           groupIds: [],
           frameId: null,
           isDeleted: false,
           boundElements: null,
+          updated: Date.now(),
+          locked: false,
+          link: null,
           seed: randSeed(),
           version: 1,
           versionNonce: randSeed(),
@@ -535,6 +554,9 @@ export class Diagram {
         groupIds: [],
         frameId: null,
         isDeleted: false,
+        updated: Date.now(),
+        locked: false,
+        link: null,
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
@@ -543,6 +565,7 @@ export class Diagram {
       const textWidth = node.width - 20;
       const textHeight = 20;
 
+      const boundFf: FontFamily = o?.fontFamily ?? 1;
       elements.push({
         id: textId,
         type: "text",
@@ -552,7 +575,8 @@ export class Diagram {
         height: textHeight,
         text: node.label,
         fontSize: o?.fontSize ?? 16,
-        fontFamily: o?.fontFamily ?? 1,
+        fontFamily: boundFf,
+        lineHeight: getLineHeight(boundFf),
         textAlign: o?.textAlign ?? "center",
         verticalAlign: o?.verticalAlign ?? "middle",
         containerId: node.id,
@@ -569,6 +593,9 @@ export class Diagram {
         frameId: null,
         isDeleted: false,
         boundElements: null,
+        updated: Date.now(),
+        locked: false,
+        link: null,
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
@@ -683,14 +710,17 @@ export class Diagram {
         elbowed: isElbowed,
         opacity: co?.opacity ?? 100,
         angle: 0,
-        startBinding: { elementId: edge.from, focus: 0, gap: 1, fixedPoint: null },
-        endBinding: { elementId: edge.to, focus: 0, gap: 1, fixedPoint: null },
+        startBinding: { elementId: edge.from, focus: 0, gap: 1, fixedPoint: [0.5, 0.5] },
+        endBinding: { elementId: edge.to, focus: 0, gap: 1, fixedPoint: [0.5, 0.5] },
         startArrowhead: co?.startArrowhead ?? null,
         endArrowhead: co?.endArrowhead ?? "arrow",
         groupIds: [],
         frameId: null,
         isDeleted: false,
         boundElements: labelTextId ? [{ type: "text", id: labelTextId }] : null,
+        updated: Date.now(),
+        locked: false,
+        link: null,
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
@@ -721,6 +751,7 @@ export class Diagram {
           labelY = arrowY - 12;
         }
 
+        const labelFf: FontFamily = 1;
         elements.push({
           id: labelTextId,
           type: "text",
@@ -730,7 +761,8 @@ export class Diagram {
           height: 20,
           text: edge.label,
           fontSize: co?.labelFontSize ?? 14,
-          fontFamily: 1,
+          fontFamily: labelFf,
+          lineHeight: getLineHeight(labelFf),
           textAlign: "center",
           verticalAlign: "middle",
           containerId: arrowId,
@@ -747,6 +779,9 @@ export class Diagram {
           frameId: null,
           isDeleted: false,
           boundElements: null,
+          updated: Date.now(),
+          locked: false,
+          link: null,
           seed: randSeed(),
           version: 1,
           versionNonce: randSeed(),
@@ -792,6 +827,9 @@ export class Diagram {
         groupIds: [],
         frameId: null,
         isDeleted: false,
+        updated: Date.now(),
+        locked: false,
+        link: null,
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
@@ -805,6 +843,7 @@ export class Diagram {
         text: group.label,
         fontSize: 14,
         fontFamily: 1,
+        lineHeight: 1.25,
         textAlign: "left",
         verticalAlign: "top",
         containerId: null,
@@ -821,6 +860,9 @@ export class Diagram {
         frameId: null,
         isDeleted: false,
         boundElements: null,
+        updated: Date.now(),
+        locked: false,
+        link: null,
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),

@@ -13,10 +13,10 @@ import { Diagram } from "../src/sdk.js";
 import type { RenderOpts, RenderResult } from "../src/types.js";
 
 const SDK_TYPES = `
-type FillStyle = "solid" | "hachure" | "cross-hatch";
+type FillStyle = "solid" | "hachure" | "cross-hatch" | "zigzag";
 type StrokeStyle = "solid" | "dashed" | "dotted";
 type FontFamily = 1 | 2 | 3;  // Virgil / Helvetica / Cascadia
-type Arrowhead = null | "arrow" | "bar" | "dot" | "triangle";
+type Arrowhead = null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";
 type TextAlign = "left" | "center" | "right";
 type VerticalAlign = "top" | "middle";
 

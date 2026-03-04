@@ -1,5 +1,5 @@
 /** Excalidraw fill styles */
-export type FillStyle = "solid" | "hachure" | "cross-hatch";
+export type FillStyle = "solid" | "hachure" | "cross-hatch" | "zigzag";
 
 /** Excalidraw stroke styles */
 export type StrokeStyle = "solid" | "dashed" | "dotted";
@@ -8,7 +8,7 @@ export type StrokeStyle = "solid" | "dashed" | "dotted";
 export type FontFamily = 1 | 2 | 3;
 
 /** Excalidraw arrowhead types */
-export type Arrowhead = null | "arrow" | "bar" | "dot" | "triangle";
+export type Arrowhead = null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";
 
 /** Excalidraw text alignment */
 export type TextAlign = "left" | "center" | "right";
