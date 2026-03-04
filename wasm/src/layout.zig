@@ -570,6 +570,75 @@ fn writeOutput(
     return written;
 }
 
+/// Check if an axis-aligned segment intersects a node's padded bounding box.
+/// Handles both horizontal (y1==y2) and vertical (x1==x2) segments.
+fn segmentHitsNode(x1: i32, y1: i32, x2: i32, y2: i32, node: Node, padding: i32) bool {
+    if (node.is_virtual) return false;
+    if (node.width == 0 and node.height == 0) return false;
+
+    const rx = node.x - padding;
+    const ry = node.y - padding;
+    const rw = node.width + padding * 2;
+    const rh = node.height + padding * 2;
+
+    if (y1 == y2) {
+        // Horizontal segment
+        if (y1 < ry or y1 > ry + rh) return false;
+        const seg_min = @min(x1, x2);
+        const seg_max = @max(x1, x2);
+        return seg_max > rx and seg_min < rx + rw;
+    } else if (x1 == x2) {
+        // Vertical segment
+        if (x1 < rx or x1 > rx + rw) return false;
+        const seg_min = @min(y1, y2);
+        const seg_max = @max(y1, y2);
+        return seg_max > ry and seg_min < ry + rh;
+    }
+    return false;
+}
+
+/// Find the first node whose bounding box is hit by the given segment.
+/// Skips the source and target nodes (skip1, skip2).
+fn findBlockingNode(x1: i32, y1: i32, x2: i32, y2: i32, nodes: []const Node, skip1: usize, skip2: usize, padding: i32) ?usize {
+    for (nodes, 0..) |n, i| {
+        if (i == skip1 or i == skip2) continue;
+        if (segmentHitsNode(x1, y1, x2, y2, n, padding)) return i;
+    }
+    return null;
+}
+
+const OBSTACLE_PADDING: i32 = 20;
+
+fn writePoint6(out: []u8, x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, x4: i32, y4: i32, x5: i32, y5: i32, x6: i32, y6: i32) usize {
+    var w: usize = 0;
+    w += copySlice(out[w..], "[[");
+    w += writeInt(out[w..], x1);
+    w += copySlice(out[w..], ",");
+    w += writeInt(out[w..], y1);
+    w += copySlice(out[w..], "],[");
+    w += writeInt(out[w..], x2);
+    w += copySlice(out[w..], ",");
+    w += writeInt(out[w..], y2);
+    w += copySlice(out[w..], "],[");
+    w += writeInt(out[w..], x3);
+    w += copySlice(out[w..], ",");
+    w += writeInt(out[w..], y3);
+    w += copySlice(out[w..], "],[");
+    w += writeInt(out[w..], x4);
+    w += copySlice(out[w..], ",");
+    w += writeInt(out[w..], y4);
+    w += copySlice(out[w..], "],[");
+    w += writeInt(out[w..], x5);
+    w += copySlice(out[w..], ",");
+    w += writeInt(out[w..], y5);
+    w += copySlice(out[w..], "],[");
+    w += writeInt(out[w..], x6);
+    w += copySlice(out[w..], ",");
+    w += writeInt(out[w..], y6);
+    w += copySlice(out[w..], "]]");
+    return w;
+}
+
 /// Generate orthogonal edge route points as JSON array [[x,y],...]
 fn routeEdge(
     out: []u8,
@@ -609,7 +678,6 @@ fn routeEdge(
     const d_y = tgt_cy - src_cy;
     const abs_dx = if (d_x < 0) -d_x else d_x;
     const abs_dy = if (d_y < 0) -d_y else d_y;
-    _ = node_count;
 
     var sx: i32 = undefined;
     var sy: i32 = undefined;
@@ -651,20 +719,105 @@ fn routeEdge(
     const dy = ty - sy;
     const adx = if (dx < 0) -dx else dx;
     const ady = if (dy < 0) -dy else dy;
+    const all_nodes = nodes[0..node_count];
 
     if (vertical) {
         if (adx < 10) {
-            written += writePoint2(out[written..], sx, sy, tx, ty);
+            // Straight vertical — check for obstacle
+            if (findBlockingNode(sx, sy, tx, ty, all_nodes, from_idx, to_idx, OBSTACLE_PADDING)) |blocker| {
+                // Convert to 4-point elbow that goes around the obstacle
+                const obs = all_nodes[blocker];
+                const obs_left = obs.x - OBSTACLE_PADDING;
+                const obs_right = obs.x + obs.width + OBSTACLE_PADDING;
+                const mid_y = sy + @divTrunc(dy, 2);
+                // Pick the side closer to sx
+                const detour_x = if ((sx - obs_left) < (obs_right - sx) and (sx - obs_left) >= 0)
+                    obs_left
+                else if ((obs_right - sx) <= (sx - obs_left))
+                    obs_right
+                else
+                    obs_right;
+                written += writePoint4(out[written..], sx, sy, sx, mid_y, detour_x, mid_y, tx, ty);
+                // Recheck: does the new middle segment still hit something?
+                // If so, try a 6-point S-route
+                if (findBlockingNode(sx, mid_y, detour_x, mid_y, all_nodes, from_idx, to_idx, OBSTACLE_PADDING) != null) {
+                    // 6-point: go fully to detour_x side
+                    written = 0;
+                    written += writePoint6(out[written..], sx, sy, sx, mid_y, detour_x, mid_y, detour_x, ty, tx, ty, tx, ty);
+                }
+            } else {
+                written += writePoint2(out[written..], sx, sy, tx, ty);
+            }
         } else {
             const mid_y = sy + @divTrunc(dy, 2);
-            written += writePoint4(out[written..], sx, sy, sx, mid_y, tx, mid_y, tx, ty);
+            // Check middle segment (horizontal: sx,mid_y → tx,mid_y) for obstacles
+            if (findBlockingNode(sx, mid_y, tx, mid_y, all_nodes, from_idx, to_idx, OBSTACLE_PADDING)) |blocker| {
+                const obs = all_nodes[blocker];
+                const obs_top = obs.y - OBSTACLE_PADDING;
+                const obs_bottom = obs.y + obs.height + OBSTACLE_PADDING;
+                // Shift mid_y above or below the obstacle
+                const dist_above = if (mid_y >= obs_top) mid_y - obs_top else std.math.maxInt(i32);
+                const dist_below = if (obs_bottom >= mid_y) obs_bottom - mid_y else std.math.maxInt(i32);
+                const shifted_y = if (dist_above <= dist_below) obs_top else obs_bottom;
+                // Check if the shifted route still hits something
+                if (findBlockingNode(sx, shifted_y, tx, shifted_y, all_nodes, from_idx, to_idx, OBSTACLE_PADDING) != null) {
+                    // 6-point S-route: go around obstacle entirely
+                    const detour_x = if (sx < obs.x + @divTrunc(obs.width, 2))
+                        obs.x - OBSTACLE_PADDING
+                    else
+                        obs.x + obs.width + OBSTACLE_PADDING;
+                    written += writePoint6(out[written..], sx, sy, sx, shifted_y, detour_x, shifted_y, detour_x, ty, tx, ty, tx, ty);
+                } else {
+                    written += writePoint4(out[written..], sx, sy, sx, shifted_y, tx, shifted_y, tx, ty);
+                }
+            } else {
+                written += writePoint4(out[written..], sx, sy, sx, mid_y, tx, mid_y, tx, ty);
+            }
         }
     } else {
         if (ady < 10) {
-            written += writePoint2(out[written..], sx, sy, tx, ty);
+            // Straight horizontal — check for obstacle
+            if (findBlockingNode(sx, sy, tx, ty, all_nodes, from_idx, to_idx, OBSTACLE_PADDING)) |blocker| {
+                const obs = all_nodes[blocker];
+                const obs_top = obs.y - OBSTACLE_PADDING;
+                const obs_bottom = obs.y + obs.height + OBSTACLE_PADDING;
+                const mid_x = sx + @divTrunc(dx, 2);
+                const detour_y = if ((sy - obs_top) < (obs_bottom - sy) and (sy - obs_top) >= 0)
+                    obs_top
+                else if ((obs_bottom - sy) <= (sy - obs_top))
+                    obs_bottom
+                else
+                    obs_bottom;
+                written += writePoint4(out[written..], sx, sy, mid_x, sy, mid_x, detour_y, tx, ty);
+                if (findBlockingNode(mid_x, sy, mid_x, detour_y, all_nodes, from_idx, to_idx, OBSTACLE_PADDING) != null) {
+                    written = 0;
+                    written += writePoint6(out[written..], sx, sy, mid_x, sy, mid_x, detour_y, tx, detour_y, tx, ty, tx, ty);
+                }
+            } else {
+                written += writePoint2(out[written..], sx, sy, tx, ty);
+            }
         } else {
             const mid_x = sx + @divTrunc(dx, 2);
-            written += writePoint4(out[written..], sx, sy, mid_x, sy, mid_x, ty, tx, ty);
+            // Check middle segment (vertical: mid_x,sy → mid_x,ty) for obstacles
+            if (findBlockingNode(mid_x, sy, mid_x, ty, all_nodes, from_idx, to_idx, OBSTACLE_PADDING)) |blocker| {
+                const obs = all_nodes[blocker];
+                const obs_left = obs.x - OBSTACLE_PADDING;
+                const obs_right = obs.x + obs.width + OBSTACLE_PADDING;
+                const dist_left = if (mid_x >= obs_left) mid_x - obs_left else std.math.maxInt(i32);
+                const dist_right = if (obs_right >= mid_x) obs_right - mid_x else std.math.maxInt(i32);
+                const shifted_x = if (dist_left <= dist_right) obs_left else obs_right;
+                if (findBlockingNode(shifted_x, sy, shifted_x, ty, all_nodes, from_idx, to_idx, OBSTACLE_PADDING) != null) {
+                    const detour_y = if (sy < obs.y + @divTrunc(obs.height, 2))
+                        obs.y - OBSTACLE_PADDING
+                    else
+                        obs.y + obs.height + OBSTACLE_PADDING;
+                    written += writePoint6(out[written..], sx, sy, shifted_x, sy, shifted_x, detour_y, tx, detour_y, tx, ty, tx, ty);
+                } else {
+                    written += writePoint4(out[written..], sx, sy, shifted_x, sy, shifted_x, ty, tx, ty);
+                }
+            } else {
+                written += writePoint4(out[written..], sx, sy, mid_x, sy, mid_x, ty, tx, ty);
+            }
         }
     }
 

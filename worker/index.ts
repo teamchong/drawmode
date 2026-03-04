@@ -90,7 +90,7 @@ async function executeCodeInWorker(code: string, renderOpts: RenderOpts): Promis
     class ConfiguredDiagram extends Diagram {
       override async render(opts?: RenderOpts): Promise<RenderResult> {
         const merged = { ...renderOpts, ...opts };
-        if (merged.format === "excalidraw" || merged.format === "svg" || merged.format === "png") {
+        if (merged.format === "excalidraw") {
           merged.format = "url";
         }
         return super.render(merged);

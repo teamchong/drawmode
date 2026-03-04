@@ -136,16 +136,6 @@ describe("Diagram SDK", () => {
     expect(arrows[0].x).not.toBe(arrows[1].x);
   });
 
-  it("render with format svg produces SVG string", async () => {
-    const d = new Diagram();
-    d.addBox("Test", { row: 0, col: 0, color: "backend" });
-
-    const result = await d.render({ format: "svg" });
-    expect(result.svg).toBeDefined();
-    expect(result.svg!).toContain("<svg");
-    expect(result.svg!).toContain("</svg>");
-    expect(result.svg!).toContain("<rect");
-  });
 
   // ── New: Custom Properties ──
 

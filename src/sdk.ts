@@ -454,44 +454,22 @@ export class Diagram {
     const result: RenderResult = { json: excalidrawJson };
     const format = opts?.format ?? "excalidraw";
 
-    // Lazily import writeFile only when a file-writing format is used
-    const needsFs = format === "excalidraw" || format === "svg" || format === "png";
-    const writeFile = needsFs ? (await import("node:fs/promises")).writeFile : undefined;
-
     if (format === "excalidraw") {
+      const { writeFile } = await import("node:fs/promises");
       const path = opts?.path ?? "diagram.excalidraw";
-      await writeFile!(path, JSON.stringify(excalidrawJson, null, 2));
+      await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
       result.filePath = path;
 
       // Write sidecar .drawmode.ts if source code provided
       if (opts?.sourceCode && path.endsWith(".excalidraw")) {
         const sidecarPath = path.replace(/\.excalidraw$/, ".drawmode.ts");
-        await writeFile!(sidecarPath, opts.sourceCode);
+        await writeFile(sidecarPath, opts.sourceCode);
       }
     }
 
     if (format === "url") {
       const { uploadToExcalidraw } = await import("./upload.js");
       result.url = await uploadToExcalidraw(JSON.stringify(excalidrawJson));
-    }
-
-    if (format === "svg") {
-      const { exportToSvg } = await import("./export.js");
-      result.svg = exportToSvg(elements);
-      const path = opts?.path ?? "diagram.svg";
-      await writeFile!(path, result.svg);
-      result.filePath = path;
-    }
-
-    if (format === "png") {
-      const { exportToPng } = await import("./export.js");
-      const pngBytes = await exportToPng(elements);
-      if (pngBytes) {
-        result.png = pngBytes;
-        const path = opts?.path ?? "diagram.png";
-        await writeFile!(path, pngBytes);
-        result.filePath = path;
-      }
     }
 
     return result;
@@ -730,18 +708,64 @@ export class Diagram {
         } else if (sourceEdge === "right" || sourceEdge === "left") {
           // Horizontal source edge → route via midX
           if (Math.abs(dy) < 10) {
-            points = [[0, 0], [dx, 0]];
+            // Straight horizontal — check for obstacle
+            const blocker = findBlockingNodeTS(arrowX, arrowY, arrowX + dx, arrowY, positioned, edge.from, edge.to, OBSTACLE_PADDING);
+            if (blocker) {
+              const obsY = blocker.y ?? 0;
+              const obsTop = obsY - OBSTACLE_PADDING;
+              const obsBottom = obsY + blocker.height + OBSTACLE_PADDING;
+              const midX = Math.round(dx / 2);
+              const detourY = (arrowY - obsTop < obsBottom - arrowY && arrowY - obsTop >= 0) ? obsTop - arrowY : obsBottom - arrowY;
+              points = [[0, 0], [midX, 0], [midX, detourY], [dx, detourY], [dx, dy]];
+            } else {
+              points = [[0, 0], [dx, 0]];
+            }
           } else {
             const midX = Math.round(dx / 2);
-            points = [[0, 0], [midX, 0], [midX, dy], [dx, dy]];
+            // Check middle vertical segment for obstacles
+            const blocker = findBlockingNodeTS(arrowX + midX, arrowY, arrowX + midX, arrowY + dy, positioned, edge.from, edge.to, OBSTACLE_PADDING);
+            if (blocker) {
+              const obsX = blocker.x ?? 0;
+              const obsLeft = obsX - OBSTACLE_PADDING;
+              const obsRight = obsX + blocker.width + OBSTACLE_PADDING;
+              const absMidX = arrowX + midX;
+              const shiftedX = (absMidX - obsLeft <= obsRight - absMidX) ? obsLeft : obsRight;
+              const relShiftedX = shiftedX - arrowX;
+              points = [[0, 0], [relShiftedX, 0], [relShiftedX, dy], [dx, dy]];
+            } else {
+              points = [[0, 0], [midX, 0], [midX, dy], [dx, dy]];
+            }
           }
         } else {
           // Vertical source edge (top/bottom) or default → route via midY
           if (Math.abs(dx) < 10) {
-            points = [[0, 0], [0, dy]];
+            // Straight vertical — check for obstacle
+            const blocker = findBlockingNodeTS(arrowX, arrowY, arrowX, arrowY + dy, positioned, edge.from, edge.to, OBSTACLE_PADDING);
+            if (blocker) {
+              const obsX = blocker.x ?? 0;
+              const obsLeft = obsX - OBSTACLE_PADDING;
+              const obsRight = obsX + blocker.width + OBSTACLE_PADDING;
+              const midY = Math.round(dy / 2);
+              const detourX = (arrowX - obsLeft < obsRight - arrowX && arrowX - obsLeft >= 0) ? obsLeft - arrowX : obsRight - arrowX;
+              points = [[0, 0], [0, midY], [detourX, midY], [dx, dy]];
+            } else {
+              points = [[0, 0], [0, dy]];
+            }
           } else {
             const midY = Math.round(dy / 2);
-            points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
+            // Check middle horizontal segment for obstacles
+            const blocker = findBlockingNodeTS(arrowX, arrowY + midY, arrowX + dx, arrowY + midY, positioned, edge.from, edge.to, OBSTACLE_PADDING);
+            if (blocker) {
+              const obsY = blocker.y ?? 0;
+              const obsTop = obsY - OBSTACLE_PADDING;
+              const obsBottom = obsY + blocker.height + OBSTACLE_PADDING;
+              const absMidY = arrowY + midY;
+              const shiftedY = (absMidY - obsTop <= obsBottom - absMidY) ? obsTop : obsBottom;
+              const relShiftedY = shiftedY - arrowY;
+              points = [[0, 0], [0, relShiftedY], [dx, relShiftedY], [dx, dy]];
+            } else {
+              points = [[0, 0], [0, midY], [dx, midY], [dx, dy]];
+            }
           }
         }
       }
@@ -1135,6 +1159,43 @@ interface PositionedNode extends GraphNode {
 }
 
 interface Point { x: number; y: number; }
+
+const OBSTACLE_PADDING = 20;
+
+/** Check if an axis-aligned segment intersects a padded rectangle. */
+function segmentHitsRect(
+  x1: number, y1: number, x2: number, y2: number,
+  rx: number, ry: number, rw: number, rh: number, padding: number,
+): boolean {
+  const prx = rx - padding, pry = ry - padding;
+  const prw = rw + padding * 2, prh = rh + padding * 2;
+  if (y1 === y2) {
+    // Horizontal segment
+    if (y1 < pry || y1 > pry + prh) return false;
+    const segMin = Math.min(x1, x2), segMax = Math.max(x1, x2);
+    return segMax > prx && segMin < prx + prw;
+  } else if (x1 === x2) {
+    // Vertical segment
+    if (x1 < prx || x1 > prx + prw) return false;
+    const segMin = Math.min(y1, y2), segMax = Math.max(y1, y2);
+    return segMax > pry && segMin < pry + prh;
+  }
+  return false;
+}
+
+/** Find the first positioned node whose bbox is hit by the segment, skipping source/target. */
+function findBlockingNodeTS(
+  x1: number, y1: number, x2: number, y2: number,
+  positioned: Map<string, PositionedNode>, skipFrom: string, skipTo: string, padding: number,
+): PositionedNode | null {
+  for (const [id, n] of positioned) {
+    if (id === skipFrom || id === skipTo) continue;
+    if (n.type === "text" || n.type === "line") continue;
+    const nx = n.x ?? 0, ny = n.y ?? 0;
+    if (segmentHitsRect(x1, y1, x2, y2, nx, ny, n.width, n.height, padding)) return n;
+  }
+  return null;
+}
 
 function calculateArrowEndpoints(
   from: PositionedNode, to: PositionedNode,

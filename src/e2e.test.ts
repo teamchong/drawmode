@@ -31,7 +31,7 @@ declare class Diagram {
   }): string;
   addGroup(label: string, children: string[]): string;
   connect(from: string, to: string, label?: string, opts?: { style?: "solid" | "dashed" }): void;
-  render(opts?: { format?: "excalidraw" | "url" | "png" | "svg"; path?: string }): Promise<{ json: object; url?: string; filePath?: string }>;
+  render(opts?: { format?: "excalidraw" | "url"; path?: string }): Promise<{ json: object; url?: string; filePath?: string }>;
 }
 `;
 
@@ -61,7 +61,7 @@ declare class Diagram {
     `Generate an Excalidraw architecture diagram by writing TypeScript code.\n\nTypescript types:\n${SDK_TYPES}`,
     {
       code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
-      format: z.enum(["excalidraw", "url", "png", "svg"]).default("excalidraw").describe("Output format"),
+      format: z.enum(["excalidraw", "url"]).default("excalidraw").describe("Output format"),
       path: z.string().optional().describe("File path for .excalidraw output"),
     },
     async ({ code, format, path }) => {
@@ -88,15 +88,6 @@ declare class Diagram {
 
       if (format === "excalidraw") {
         parts.push({ type: "text" as const, text: JSON.stringify(result.json, null, 2) });
-      }
-
-      if (format === "svg" && result.svg) {
-        parts.push({ type: "text" as const, text: result.svg });
-      }
-
-      if (format === "png" && result.png) {
-        const base64 = Buffer.from(result.png).toString("base64");
-        parts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
       }
 
       const { elements } = result.json;
@@ -294,60 +285,6 @@ describe("e2e: MCP draw tool", () => {
 
     // Verify structuredContent for widget
     expect(result.structuredContent).toBeDefined();
-  });
-
-  it("draw produces SVG output", async () => {
-    const result = await client.callTool({
-      name: "draw",
-      arguments: {
-        code: `
-          const d = new Diagram();
-          d.addBox("Service A", { row: 0, col: 0, color: "backend" });
-          d.addBox("Service B", { row: 0, col: 1, color: "frontend" });
-          return d.render({ format: "svg" });
-        `,
-        format: "svg",
-      },
-    });
-
-    expect(result.isError).toBeFalsy();
-    const parts = result.content as Array<{ type: string; text: string }>;
-
-    const svgPart = parts.find(p => p.text.includes("<svg"));
-    expect(svgPart).toBeDefined();
-    expect(svgPart!.text).toContain("<rect");
-    expect(svgPart!.text).toContain("</svg>");
-    expect(svgPart!.text).toContain("viewBox");
-  });
-
-  it("draw produces PNG output", async () => {
-    const result = await client.callTool({
-      name: "draw",
-      arguments: {
-        code: `
-          const d = new Diagram();
-          d.addBox("PNG Test", { row: 0, col: 0 });
-          return d.render({ format: "png" });
-        `,
-        format: "png",
-      },
-    });
-
-    expect(result.isError).toBeFalsy();
-    const parts = result.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-
-    const imgPart = parts.find(p => p.type === "image");
-    expect(imgPart).toBeDefined();
-    expect(imgPart!.mimeType).toBe("image/png");
-    expect(imgPart!.data!.length).toBeGreaterThan(100); // PNG base64 should be substantial
-
-    // Verify it's valid base64
-    const pngBytes = Buffer.from(imgPart!.data!, "base64");
-    // PNG magic bytes: 137 80 78 71
-    expect(pngBytes[0]).toBe(137);
-    expect(pngBytes[1]).toBe(80);
-    expect(pngBytes[2]).toBe(78);
-    expect(pngBytes[3]).toBe(71);
   });
 
   it("draw handles syntax errors gracefully", async () => {

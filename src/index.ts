@@ -131,7 +131,7 @@ declare class Diagram {
 
   /** Render the diagram. Always return this from your code. */
   render(opts?: {
-    format?: "excalidraw" | "url" | "png" | "svg";
+    format?: "excalidraw" | "url";
     path?: string;
   }): Promise<{ json: object; url?: string; filePath?: string }>;
 }
@@ -202,7 +202,7 @@ Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omit
 Use x/y for absolute pixel positioning (bypasses grid).`,
     {
       code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
-      format: z.enum(["excalidraw", "url", "png", "svg"]).default("excalidraw").describe("Output format"),
+      format: z.enum(["excalidraw", "url"]).default("excalidraw").describe("Output format"),
       path: z.string().optional().describe("File path for .excalidraw output"),
     },
     async ({ code, format, path }) => {
@@ -217,7 +217,7 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
 
       // Return minimal responses to avoid bloating context:
       // - url format: just the URL
-      // - file formats (excalidraw/svg/png): just the file path
+      // - excalidraw format: just the file path
       const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 
       if (format === "url" && result.url) {

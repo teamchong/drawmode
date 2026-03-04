@@ -1,6 +1,6 @@
 /**
- * Layout bridge — Zig WASM for graph layout, SVG rendering, PNG rendering,
- * and validation. TS grid layout as last-resort fallback.
+ * Layout bridge — Zig WASM for graph layout and validation.
+ * TS grid layout as last-resort fallback.
  *
  * Layout priority: WASM Sugiyama → TS grid (in sdk.ts)
  */
@@ -40,8 +40,6 @@ interface WasmLayoutExports {
   resetHeap: () => void;
   layoutGraph: (nodesPtr: number, nodesLen: number, edgesPtr: number, edgesLen: number, outPtr: number, outCap: number) => number;
   validate: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
-  renderSvg: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
-  renderPng: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
 }
 
 let wasmInstance: WasmLayoutExports | null = null;
@@ -91,21 +89,6 @@ function callWasm(
   const written = fn(inPtr, inBytes.byteLength, outPtr, outCap);
   const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
   return result;
-}
-
-/** Call a single-input WASM function that returns binary data. */
-function callWasmBinary(
-  fn: (inPtr: number, inLen: number, outPtr: number, outCap: number) => number,
-  inputJson: string,
-  outCap: number,
-): Uint8Array | null {
-  if (!wasmInstance) return null;
-  wasmInstance.resetHeap();
-  const inBytes = new TextEncoder().encode(inputJson);
-  const inPtr = writeToWasm(inBytes);
-  const outPtr = wasmInstance.alloc(outCap);
-  const written = fn(inPtr, inBytes.byteLength, outPtr, outCap);
-  return written > 0 ? readFromWasm(outPtr, written) : null;
 }
 
 /**
@@ -198,14 +181,3 @@ export function validateElements(elementsJson: string): string | null {
   return callWasm(wasmInstance.validate.bind(wasmInstance), elementsJson, 16 * 1024);
 }
 
-/** Render Excalidraw elements to SVG using WASM. */
-export function renderSvg(elementsJson: string): string | null {
-  if (!wasmInstance) return null;
-  return callWasm(wasmInstance.renderSvg.bind(wasmInstance), elementsJson, 2 * 1024 * 1024);
-}
-
-/** Render Excalidraw elements to PNG using WASM. Returns PNG bytes or null. */
-export function renderPng(elementsJson: string): Uint8Array | null {
-  if (!wasmInstance) return null;
-  return callWasmBinary(wasmInstance.renderPng.bind(wasmInstance), elementsJson, 8 * 1024 * 1024);
-}
