@@ -71,7 +71,19 @@ d.connect(a, b, "flow", { startArrowhead: "dot", endArrowhead: "triangle" });
 return d.render();
 \`\`\`
 
-Example — edit existing diagram:
+Example — iterate on existing diagram (read the .drawmode.ts sidecar and modify):
+\`\`\`typescript
+// Read diagram.drawmode.ts, then modify and re-render:
+const d = new Diagram();
+const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
+const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
+const cache = d.addBox("Redis", { row: 1, col: 1, color: "cache" }); // added
+d.connect(api, db, "queries");
+d.connect(api, cache, "reads");
+return d.render({ path: "diagram.excalidraw" });
+\`\`\`
+
+Example — edit existing diagram (use fromFile when no .drawmode.ts sidecar exists):
 \`\`\`typescript
 const d = await Diagram.fromFile("diagram.excalidraw");
 const ids = d.findByLabel("Old Service");
@@ -79,6 +91,8 @@ if (ids.length > 0) d.updateNode(ids[0], { label: "New Service", color: "ai" });
 d.removeNode(d.findByLabel("Deprecated")[0]);
 return d.render({ path: "diagram.excalidraw" });
 \`\`\`
+
+Prefer editing the .drawmode.ts source over fromFile() when a sidecar exists.
 
 Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omitted.
 Use x/y for absolute pixel positioning (bypasses grid).`,
@@ -110,7 +124,12 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
       } else if (format === "url" && result.url) {
         parts.push({ type: "text" as const, text: result.url });
       } else if (result.filePath) {
-        parts.push({ type: "text" as const, text: result.filePath });
+        let text = result.filePath;
+        if (format === "excalidraw" && result.filePath.endsWith(".excalidraw")) {
+          const sidecarPath = result.filePath.replace(/\.excalidraw$/, ".drawmode.ts");
+          text += ` (source: ${sidecarPath})`;
+        }
+        parts.push({ type: "text" as const, text });
       } else if (result.url) {
         parts.push({ type: "text" as const, text: result.url });
       }
@@ -196,7 +215,13 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
 | k8s-ingress | Ingress, Gateways    |
 | k8s-volume  | PVs, PVCs, Storage   |
 
-## Editing Existing Diagrams
+## Iterating on Diagrams
+
+When you render with format "excalidraw", a .drawmode.ts sidecar is saved with the source code.
+To iterate: read the .drawmode.ts file, modify the code, and re-execute via the draw tool.
+Use fromFile() only for diagrams without a .drawmode.ts sidecar.
+
+## Editing Existing Diagrams (no sidecar)
 
 \`\`\`typescript
 const d = await Diagram.fromFile("diagram.excalidraw");
