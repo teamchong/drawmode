@@ -173,6 +173,7 @@ return d.render({ path: "diagram.excalidraw" });
 |--------|-------------|----------|
 | `excalidraw` | `.excalidraw` JSON file | Claude Code, Cursor, VS Code |
 | `url` | Shareable excalidraw.com link | All clients |
+| `png` | Pixel-perfect PNG image (via Cloudflare Browser Rendering) | Cloudflare Worker only |
 
 ## Architecture
 
@@ -233,6 +234,10 @@ cd wasm && zig build test  # Run Zig tests
 **Local (HTTP)**: `npx drawmode` — Streamable HTTP on port 3001
 
 **Remote (Cloudflare)**: Deploy `worker/` to Cloudflare Workers
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/teamchong/drawmode/tree/main/worker)
+
+The Worker supports PNG export via [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) — headless Chromium on the edge renders pixel-perfect PNGs using the Excalidraw renderer. Free tier includes 10 min/day. For local dev with browser rendering: `cd worker && npx wrangler dev --remote`.
 
 ## License
 

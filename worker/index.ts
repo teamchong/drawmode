@@ -7,10 +7,84 @@
  * - POST /proxy/excalidraw — Proxy for excalidraw.com upload (no CORS on their API)
  *
  * Note: No WASM support in Worker — uses TS-only grid layout via the SDK.
+ * PNG export uses Cloudflare Browser Rendering (puppeteer) when available.
  */
 
 import { Diagram } from "../src/sdk.js";
 import type { RenderOpts, RenderResult } from "../src/types.js";
+import puppeteer from "@cloudflare/puppeteer";
+
+interface Env {
+  MYBROWSER: Fetcher;
+}
+
+/**
+ * Render Excalidraw elements to PNG via Cloudflare Browser Rendering.
+ * Returns base64-encoded PNG string, or null if browser binding unavailable.
+ */
+async function renderPng(elements: unknown[], env: Env): Promise<string | null> {
+  if (!env.MYBROWSER) return null;
+
+  const renderHTML = `<!DOCTYPE html>
+<html>
+<head>
+<style>html, body { margin: 0; padding: 0; background: white; }</style>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@excalidraw/excalidraw/dist/excalidraw.production.min.js"></script>
+</head>
+<body>
+<script>
+(async () => {
+  try {
+    const elements = ${JSON.stringify(elements)};
+    const svg = await ExcalidrawLib.exportToSvg({
+      elements,
+      appState: { exportBackground: true, viewBackgroundColor: "#ffffff" },
+      files: null,
+    });
+    const svgStr = new XMLSerializer().serializeToString(svg);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth * 2;
+      canvas.height = img.naturalHeight * 2;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(2, 2);
+      ctx.drawImage(img, 0, 0);
+      window.__PNG_DATA__ = canvas.toDataURL("image/png").split(",")[1];
+      window.__DONE = true;
+    };
+    img.onerror = () => {
+      window.__ERROR = "Failed to load SVG as image";
+      window.__DONE = true;
+    };
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgStr);
+  } catch (e) {
+    window.__ERROR = e.message || String(e);
+    window.__DONE = true;
+  }
+})();
+</script>
+</body>
+</html>`;
+
+  let browser;
+  try {
+    browser = await puppeteer.launch(env.MYBROWSER);
+    const page = await browser.newPage();
+    await page.setContent(renderHTML, { waitUntil: "networkidle0" });
+    await page.waitForFunction("window.__DONE", { timeout: 15000 });
+
+    const error = await page.evaluate(() => (window as unknown as Record<string, string>).__ERROR);
+    if (error) throw new Error(error);
+
+    const pngBase64 = await page.evaluate(() => (window as unknown as Record<string, string>).__PNG_DATA__);
+    return pngBase64 as string;
+  } finally {
+    if (browser) await browser.close();
+  }
+}
 
 const SDK_TYPES = `
 type FillStyle = "solid" | "hachure" | "cross-hatch" | "zigzag";
@@ -79,7 +153,7 @@ declare class Diagram {
   updateEdge(from: string, to: string, update: Partial<ConnectOpts> & { label?: string }, matchLabel?: string): void;
   removeNode(id: string): void;
   removeEdge(from: string, to: string, label?: string): void;
-  render(opts?: { format?: "url" }): Promise<{ json: object; url?: string }>;
+  render(opts?: { format?: "url" | "png" }): Promise<{ json: object; url?: string }>;
 }
 `;
 
@@ -123,7 +197,7 @@ async function executeCodeInWorker(code: string, renderOpts: RenderOpts): Promis
 
 
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") {
@@ -168,7 +242,7 @@ export default {
                     type: "object",
                     properties: {
                       code: { type: "string", description: "TypeScript code using the Diagram class." },
-                      format: { type: "string", enum: ["excalidraw", "url"], default: "excalidraw" },
+                      format: { type: "string", enum: ["excalidraw", "url", "png"], default: "excalidraw" },
                     },
                     required: ["code"],
                   },
@@ -195,8 +269,10 @@ export default {
 
           if (toolName === "draw") {
             const code = args.code as string;
-            const format = (args.format as "excalidraw" | "url") ?? "url";
-            const { result, error } = await executeCodeInWorker(code, { format });
+            const requestedFormat = (args.format as string) ?? "url";
+            const wantsPng = requestedFormat === "png";
+            // Always build as "url" internally — PNG is a post-processing step
+            const { result, error } = await executeCodeInWorker(code, { format: "url" });
 
             if (error) {
               return Response.json({
@@ -211,14 +287,34 @@ export default {
               });
             }
 
-            const parts: { type: "text"; text: string }[] = [];
-            if (result.url) {
-              parts.push({ type: "text", text: result.url });
+            const elements = Array.isArray((result.json as { elements?: unknown[] }).elements)
+              ? (result.json as { elements: unknown[] }).elements
+              : [];
+            const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+
+            // PNG export via Cloudflare Browser Rendering
+            if (wantsPng) {
+              try {
+                const pngBase64 = await renderPng(elements, env);
+                if (pngBase64) {
+                  parts.push({ type: "image", data: pngBase64, mimeType: "image/png" });
+                } else {
+                  // Browser binding unavailable — fall back to URL
+                  if (result.url) parts.push({ type: "text", text: result.url });
+                  parts.push({ type: "text", text: "PNG export unavailable (no browser binding). Fell back to URL." });
+                }
+              } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                if (result.url) parts.push({ type: "text", text: result.url });
+                parts.push({ type: "text", text: `PNG export failed: ${msg}. Fell back to URL.` });
+              }
+            } else {
+              if (result.url) {
+                parts.push({ type: "text", text: result.url });
+              }
             }
-            const elementCount = Array.isArray((result.json as { elements?: unknown[] }).elements)
-              ? (result.json as { elements: unknown[] }).elements.length
-              : 0;
-            parts.push({ type: "text", text: `Generated ${elementCount} elements` });
+
+            parts.push({ type: "text", text: `Generated ${elements.length} elements` });
 
             return Response.json({
               jsonrpc: "2.0",
