@@ -1,0 +1,192 @@
+/**
+ * Image export — shared HTML template + local Puppeteer renderer.
+ *
+ * `buildRenderHTML(elements)` returns the HTML page that loads Excalidraw from CDN,
+ * renders elements to SVG → canvas → PNG at 2x resolution.
+ *
+ * `renderPngLocal(elements, outputPath)` — PNG via headless Chrome.
+ * `renderSvgLocal(elements, outputPath)` — SVG via headless Chrome (no canvas step).
+ *
+ * Both return null if puppeteer is not installed.
+ */
+
+// Pin to 0.17.6 — 0.18.0 moved the UMD bundle path
+const EXCALIDRAW_CDN = "https://unpkg.com/@excalidraw/excalidraw@0.17.6/dist/excalidraw.production.min.js";
+
+/**
+ * Build the HTML template that renders Excalidraw elements to PNG.
+ * Used by both local puppeteer and Cloudflare Browser Rendering.
+ */
+export function buildRenderHTML(elements: unknown[]): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<style>html, body { margin: 0; padding: 0; background: white; }</style>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="${EXCALIDRAW_CDN}"></script>
+</head>
+<body>
+<script>
+(async () => {
+  try {
+    const elements = ${JSON.stringify(elements)};
+    const svg = await ExcalidrawLib.exportToSvg({
+      elements,
+      appState: { exportBackground: true, viewBackgroundColor: "#ffffff" },
+      files: null,
+    });
+    const svgStr = new XMLSerializer().serializeToString(svg);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth * 2;
+      canvas.height = img.naturalHeight * 2;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(2, 2);
+      ctx.drawImage(img, 0, 0);
+      window.__PNG_DATA__ = canvas.toDataURL("image/png").split(",")[1];
+      window.__DONE = true;
+    };
+    img.onerror = () => {
+      window.__ERROR = "Failed to load SVG as image";
+      window.__DONE = true;
+    };
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgStr);
+  } catch (e) {
+    window.__ERROR = e.message || String(e);
+    window.__DONE = true;
+  }
+})();
+</script>
+</body>
+</html>`;
+}
+
+/**
+ * Build HTML template that renders Excalidraw elements to SVG string.
+ */
+export function buildSvgHTML(elements: unknown[]): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<style>html, body { margin: 0; padding: 0; background: white; }</style>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="${EXCALIDRAW_CDN}"></script>
+</head>
+<body>
+<script>
+(async () => {
+  try {
+    const elements = ${JSON.stringify(elements)};
+    const svg = await ExcalidrawLib.exportToSvg({
+      elements,
+      appState: { exportBackground: true, viewBackgroundColor: "#ffffff" },
+      files: null,
+    });
+    window.__SVG_DATA__ = new XMLSerializer().serializeToString(svg);
+    window.__DONE = true;
+  } catch (e) {
+    window.__ERROR = e.message || String(e);
+    window.__DONE = true;
+  }
+})();
+</script>
+</body>
+</html>`;
+}
+
+/**
+ * Launch a puppeteer browser with CDN-friendly flags.
+ * Returns { browser, puppeteerMod, userDataDir } or null if puppeteer not installed.
+ */
+async function launchBrowser(): Promise<{ browser: any; userDataDir: string } | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let puppeteerMod: any;
+  try {
+    const mod = "puppeteer";
+    puppeteerMod = await import(/* webpackIgnore: true */ mod);
+  } catch {
+    return null;
+  }
+
+  const { mkdtemp } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const userDataDir = await mkdtemp(join(tmpdir(), "drawmode-pup-"));
+
+  const browser = await (puppeteerMod.default ?? puppeteerMod).launch({
+    headless: true,
+    args: [
+      "--disable-web-security",
+      "--disable-features=OpaqueResponseBlockingV02",
+      "--user-data-dir=" + userDataDir,
+      "--no-sandbox",
+    ],
+  });
+
+  return { browser, userDataDir };
+}
+
+/**
+ * Render elements to SVG locally using puppeteer.
+ * Returns SVG string, or null if puppeteer is not installed.
+ * Writes the SVG file to outputPath.
+ */
+export async function renderSvgLocal(elements: unknown[], outputPath: string): Promise<string | null> {
+  const ctx = await launchBrowser();
+  if (!ctx) return null;
+
+  const { browser, userDataDir } = ctx;
+  try {
+    const page = await browser.newPage();
+    await page.setContent(buildSvgHTML(elements), { waitUntil: "networkidle0" });
+    await page.waitForFunction("window.__DONE", { timeout: 30000 });
+
+    const error = await page.evaluate(() => (window as unknown as Record<string, string>).__ERROR);
+    if (error) throw new Error(error);
+
+    const svgString = await page.evaluate(() => (window as unknown as Record<string, string>).__SVG_DATA__) as string;
+
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(outputPath, svgString, "utf-8");
+
+    return svgString;
+  } finally {
+    await browser.close();
+    const { rm } = await import("node:fs/promises");
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Render elements to PNG locally using puppeteer.
+ * Returns base64-encoded PNG string, or null if puppeteer is not installed.
+ * Writes the PNG file to outputPath.
+ */
+export async function renderPngLocal(elements: unknown[], outputPath: string): Promise<string | null> {
+  const ctx = await launchBrowser();
+  if (!ctx) return null;
+
+  const { browser, userDataDir } = ctx;
+  try {
+    const page = await browser.newPage();
+    await page.setContent(buildRenderHTML(elements), { waitUntil: "networkidle0" });
+    await page.waitForFunction("window.__DONE", { timeout: 30000 });
+
+    const error = await page.evaluate(() => (window as unknown as Record<string, string>).__ERROR);
+    if (error) throw new Error(error);
+
+    const pngBase64 = await page.evaluate(() => (window as unknown as Record<string, string>).__PNG_DATA__) as string;
+
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(outputPath, Buffer.from(pngBase64, "base64"));
+
+    return pngBase64;
+  } finally {
+    await browser.close();
+    const { rm } = await import("node:fs/promises");
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+  }
+}

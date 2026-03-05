@@ -192,13 +192,15 @@ export const ExcalidrawFileSchema = z.object({
 export type ExcalidrawFile = z.infer<typeof ExcalidrawFileSchema>;
 
 /** Output format options */
-export type OutputFormat = "excalidraw" | "url";
+export type OutputFormat = "excalidraw" | "url" | "png" | "svg";
 
 /** Result from rendering a diagram */
 export interface RenderResult {
   json: ExcalidrawFile;
   url?: string;
   filePath?: string;
+  pngBase64?: string;
+  svgString?: string;
 }
 
 /** Render options */

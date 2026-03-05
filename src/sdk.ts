@@ -477,6 +477,30 @@ export class Diagram {
       result.url = await uploadToExcalidraw(JSON.stringify(excalidrawJson));
     }
 
+    if (format === "png") {
+      const { renderPngLocal } = await import("./png.js");
+      const pngPath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "") + ".png";
+      const pngData = await renderPngLocal(elements, pngPath);
+      if (pngData) {
+        result.pngBase64 = pngData;
+        result.filePath = pngPath;
+      } else {
+        throw new Error("PNG export requires puppeteer. Install it with: npm install puppeteer");
+      }
+    }
+
+    if (format === "svg") {
+      const { renderSvgLocal } = await import("./png.js");
+      const svgPath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "") + ".svg";
+      const svgData = await renderSvgLocal(elements, svgPath);
+      if (svgData) {
+        result.svgString = svgData;
+        result.filePath = svgPath;
+      } else {
+        throw new Error("SVG export requires puppeteer. Install it with: npm install puppeteer");
+      }
+    }
+
     return result;
   }
 

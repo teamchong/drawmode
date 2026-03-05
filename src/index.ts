@@ -131,9 +131,9 @@ declare class Diagram {
 
   /** Render the diagram. Always return this from your code. */
   render(opts?: {
-    format?: "excalidraw" | "url";
+    format?: "excalidraw" | "url" | "png" | "svg";
     path?: string;
-  }): Promise<{ json: object; url?: string; filePath?: string }>;
+  }): Promise<{ json: object; url?: string; filePath?: string; pngBase64?: string }>;
 }
 `;
 
@@ -202,7 +202,7 @@ Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omit
 Use x/y for absolute pixel positioning (bypasses grid).`,
     {
       code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
-      format: z.enum(["excalidraw", "url"]).default("excalidraw").describe("Output format"),
+      format: z.enum(["excalidraw", "url", "png", "svg"]).default("excalidraw").describe("Output format"),
       path: z.string().optional().describe("File path for .excalidraw output"),
     },
     async ({ code, format, path }) => {
@@ -220,7 +220,12 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
       // - excalidraw format: just the file path
       const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 
-      if (format === "url" && result.url) {
+      if (result.pngBase64) {
+        parts.push({ type: "image" as const, data: result.pngBase64, mimeType: "image/png" });
+        if (result.filePath) {
+          parts.push({ type: "text" as const, text: result.filePath });
+        }
+      } else if (format === "url" && result.url) {
         parts.push({ type: "text" as const, text: result.url });
       } else if (result.filePath) {
         parts.push({ type: "text" as const, text: result.filePath });

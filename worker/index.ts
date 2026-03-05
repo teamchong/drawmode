@@ -12,6 +12,7 @@
 
 import { Diagram } from "../src/sdk.js";
 import type { RenderOpts, RenderResult } from "../src/types.js";
+import { buildRenderHTML } from "../src/png.js";
 import puppeteer from "@cloudflare/puppeteer";
 
 interface Env {
@@ -25,49 +26,7 @@ interface Env {
 async function renderPng(elements: unknown[], env: Env): Promise<string | null> {
   if (!env.MYBROWSER) return null;
 
-  const renderHTML = `<!DOCTYPE html>
-<html>
-<head>
-<style>html, body { margin: 0; padding: 0; background: white; }</style>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@excalidraw/excalidraw/dist/excalidraw.production.min.js"></script>
-</head>
-<body>
-<script>
-(async () => {
-  try {
-    const elements = ${JSON.stringify(elements)};
-    const svg = await ExcalidrawLib.exportToSvg({
-      elements,
-      appState: { exportBackground: true, viewBackgroundColor: "#ffffff" },
-      files: null,
-    });
-    const svgStr = new XMLSerializer().serializeToString(svg);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth * 2;
-      canvas.height = img.naturalHeight * 2;
-      const ctx = canvas.getContext("2d");
-      ctx.scale(2, 2);
-      ctx.drawImage(img, 0, 0);
-      window.__PNG_DATA__ = canvas.toDataURL("image/png").split(",")[1];
-      window.__DONE = true;
-    };
-    img.onerror = () => {
-      window.__ERROR = "Failed to load SVG as image";
-      window.__DONE = true;
-    };
-    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgStr);
-  } catch (e) {
-    window.__ERROR = e.message || String(e);
-    window.__DONE = true;
-  }
-})();
-</script>
-</body>
-</html>`;
+  const renderHTML = buildRenderHTML(elements);
 
   let browser;
   try {
