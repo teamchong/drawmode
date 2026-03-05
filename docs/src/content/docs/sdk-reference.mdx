@@ -1,0 +1,256 @@
+---
+title: SDK Reference
+description: Complete API reference for the Diagram SDK.
+---
+
+The `Diagram` class is the main interface for creating diagrams. All methods return element IDs that can be used with `connect()`, `addGroup()`, and editing methods.
+
+## Creating Elements
+
+### `addBox(label, opts?)`
+
+Add a rectangle element. Returns the element ID.
+
+```typescript
+const id = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
+```
+
+### `addEllipse(label, opts?)`
+
+Add an ellipse element. Returns the element ID.
+
+```typescript
+const id = d.addEllipse("Start", { row: 0, col: 0, color: "users" });
+```
+
+### `addDiamond(label, opts?)`
+
+Add a diamond shape (for flowchart decisions). Returns the element ID.
+
+```typescript
+const id = d.addDiamond("Is Valid?", { row: 1, col: 1, color: "orchestration" });
+```
+
+### `addText(text, opts?)`
+
+Add standalone text (no container). Returns the element ID.
+
+```typescript
+const id = d.addText("System Overview", {
+  x: 100, y: 50,
+  fontSize: 24,
+  fontFamily: 2, // Helvetica
+});
+```
+
+Text options:
+| Option | Type | Description |
+|--------|------|-------------|
+| `x` | `number` | Absolute x position |
+| `y` | `number` | Absolute y position |
+| `fontSize` | `number` | Font size (default 16) |
+| `fontFamily` | `1 \| 2 \| 3` | Virgil / Helvetica / Cascadia |
+| `color` | `ColorPreset` | Semantic color preset |
+| `strokeColor` | `string` | Hex color override |
+
+### `addLine(points, opts?)`
+
+Add a line element. Returns the element ID.
+
+```typescript
+const id = d.addLine([[0, 0], [200, 100]], {
+  strokeColor: "#e03131",
+  strokeWidth: 2,
+  strokeStyle: "dashed",
+});
+```
+
+## Grouping
+
+### `addGroup(label, children)`
+
+Group elements with a dashed boundary. Returns the group ID.
+
+```typescript
+const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
+const cache = d.addBox("Redis", { row: 1, col: 1, color: "cache" });
+d.addGroup("Data Layer", [db, cache]);
+```
+
+### `addFrame(name, children)`
+
+Add a native Excalidraw frame container. Returns the frame ID.
+
+```typescript
+const svc1 = d.addBox("Service A", { color: "backend" });
+const svc2 = d.addBox("Service B", { color: "backend" });
+d.addFrame("Microservices", [svc1, svc2]);
+```
+
+### `removeGroup(id)` / `removeFrame(id)`
+
+Remove a group or frame container. Children are kept.
+
+## Connections
+
+### `connect(from, to, label?, opts?)`
+
+Connect two elements with an arrow.
+
+```typescript
+d.connect(api, db, "queries");
+d.connect(api, cache, "reads", { style: "dashed" });
+d.connect(a, b, "flow", { startArrowhead: "dot", endArrowhead: "triangle" });
+```
+
+## Editing Existing Diagrams
+
+### `Diagram.fromFile(path)`
+
+Load an existing `.excalidraw` file for modification.
+
+```typescript
+const d = await Diagram.fromFile("diagram.excalidraw");
+```
+
+### `findByLabel(label, opts?)`
+
+Find node IDs by label match. Substring match by default, exact with `opts.exact`.
+
+```typescript
+const ids = d.findByLabel("API");           // substring match
+const ids = d.findByLabel("API", { exact: true }); // exact match
+```
+
+### `getNodes()`
+
+Get all node IDs.
+
+```typescript
+const allNodes = d.getNodes();
+```
+
+### `getEdges()`
+
+Get all edges.
+
+```typescript
+const edges = d.getEdges();
+// [{ from: "id1", to: "id2", label: "queries" }, ...]
+```
+
+### `updateNode(id, opts)`
+
+Update a node's properties.
+
+```typescript
+d.updateNode(ids[0], { label: "New API", color: "ai" });
+```
+
+### `updateEdge(from, to, update, matchLabel?)`
+
+Update an existing edge's properties. Optional `matchLabel` disambiguates when there are multiple edges between the same nodes.
+
+```typescript
+d.updateEdge(api, db, { label: "writes", style: "dashed" });
+```
+
+### `removeNode(id)`
+
+Remove a node and its connected edges.
+
+```typescript
+d.removeNode(d.findByLabel("Old Service")[0]);
+```
+
+### `removeEdge(from, to, label?)`
+
+Remove an edge between two nodes. Optional label disambiguates multi-edges.
+
+```typescript
+d.removeEdge(api, db, "queries");
+```
+
+## Rendering
+
+### `render(opts?)`
+
+Render the diagram. Always return this from your code.
+
+```typescript
+return d.render();                              // default: excalidraw JSON
+return d.render({ format: "url" });             // shareable URL
+return d.render({ format: "excalidraw", path: "out.excalidraw" }); // write file
+return d.render({ format: "png", path: "out.png" });  // PNG image
+return d.render({ format: "svg", path: "out.svg" });  // SVG markup
+```
+
+**Render options:**
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `format` | `"excalidraw" \| "url" \| "png" \| "svg"` | `"excalidraw"` | Output format |
+| `path` | `string` | — | File path to write output |
+
+**Return type (`RenderResult`):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `json` | `object` | Raw Excalidraw JSON |
+| `url` | `string?` | excalidraw.com shareable link |
+| `filePath` | `string?` | Local file path if written |
+| `pngBase64` | `string?` | Base64-encoded PNG (format="png") |
+| `svgString` | `string?` | SVG markup string (format="svg") |
+
+## Type Reference
+
+### `ShapeOpts`
+
+Options for `addBox`, `addEllipse`, and `addDiamond`:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `row` | `number` | — | Grid row position |
+| `col` | `number` | — | Grid column position |
+| `color` | `ColorPreset` | — | Semantic color preset |
+| `width` | `number` | — | Element width |
+| `height` | `number` | — | Element height |
+| `x` | `number` | — | Absolute x position (bypasses grid) |
+| `y` | `number` | — | Absolute y position (bypasses grid) |
+| `strokeColor` | `string` | — | Hex stroke color override |
+| `backgroundColor` | `string` | — | Hex background color override |
+| `fillStyle` | `"solid" \| "hachure" \| "cross-hatch" \| "zigzag"` | `"solid"` | Fill style |
+| `strokeWidth` | `number` | `2` | Stroke width |
+| `strokeStyle` | `"solid" \| "dashed" \| "dotted"` | `"solid"` | Stroke style |
+| `roughness` | `number` | — | 0=architect, 1=artist, 2=cartoonist |
+| `opacity` | `number` | — | 0-100 |
+| `roundness` | `{ type: number } \| null` | — | Corner roundness |
+| `fontSize` | `number` | `16` | Label font size |
+| `fontFamily` | `1 \| 2 \| 3` | `1` | Virgil / Helvetica / Cascadia |
+| `textAlign` | `"left" \| "center" \| "right"` | — | Text alignment |
+| `verticalAlign` | `"top" \| "middle"` | — | Vertical alignment |
+| `link` | `string \| null` | — | Hyperlink URL |
+| `customData` | `Record<string, unknown> \| null` | — | Arbitrary metadata |
+
+### `ConnectOpts`
+
+Options for `connect()`:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `style` | `"solid" \| "dashed" \| "dotted"` | `"solid"` | Stroke style |
+| `strokeColor` | `string` | — | Hex stroke color |
+| `strokeWidth` | `number` | — | Stroke width |
+| `roughness` | `number` | — | Roughness level |
+| `opacity` | `number` | — | 0-100 |
+| `startArrowhead` | `Arrowhead` | `null` | Start arrowhead type |
+| `endArrowhead` | `Arrowhead` | `"arrow"` | End arrowhead type |
+| `elbowed` | `boolean` | `true` | Use elbow routing |
+| `labelFontSize` | `number` | — | Label font size |
+| `customData` | `Record<string, unknown> \| null` | — | Arbitrary metadata |
+
+### `Arrowhead`
+
+`null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline"`
+
+### `ColorPreset`
+
+See [Color Presets](/color-presets/) for the full list with hex values.

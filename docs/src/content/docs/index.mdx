@@ -1,0 +1,64 @@
+---
+title: drawmode
+description: Code Mode MCP server for generating Excalidraw architecture diagrams.
+template: splash
+hero:
+  tagline: LLMs write TypeScript, not raw JSON. One tool, typed SDK, zero prompt engineering.
+  actions:
+    - text: Get Started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: SDK Reference
+      link: /sdk-reference/
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+## Features
+
+<CardGrid>
+  <Card title="Code Mode" icon="pencil">
+    LLM writes ~10 lines of TypeScript against a typed SDK. The SDK handles all Excalidraw complexity — labels, bindings, arrow math.
+  </Card>
+  <Card title="Automatic Layout" icon="setting">
+    Graphviz `dot` engine (Sugiyama algorithm) with crossing minimization and orthogonal edge routing.
+  </Card>
+  <Card title="28 Color Presets" icon="seti:color">
+    10 semantic presets + 18 cloud provider presets for AWS, Azure, GCP, and Kubernetes.
+  </Card>
+  <Card title="Multiple Outputs" icon="document">
+    `.excalidraw` files, shareable excalidraw.com URLs, PNG images, and SVG exports.
+  </Card>
+  <Card title="Edit Existing Diagrams" icon="pen">
+    `Diagram.fromFile()` loads `.excalidraw` files for modification — find, update, and remove nodes.
+  </Card>
+  <Card title="Deploy Anywhere" icon="rocket">
+    Local stdio, local HTTP, or Cloudflare Workers for remote MCP access.
+  </Card>
+</CardGrid>
+
+## Why Code Mode?
+
+Traditional MCP diagram tools ask the LLM to produce raw Excalidraw JSON — hundreds of lines with pixel coordinates, bound text element pairs, arrow binding math, and edge routing. This is fragile and error-prone.
+
+drawmode flips the approach: the LLM writes **~10 lines of TypeScript** against a typed SDK. The SDK handles all the Excalidraw complexity (labels need two elements, arrows need binding math, elbow routing needs specific flags). Graphviz handles layout. The result is always valid.
+
+```
+Traditional:  LLM → 500 lines of JSON → broken diagrams
+drawmode:     LLM → 10 lines of TypeScript → SDK + Graphviz → valid diagrams
+```
+
+## Quick Example
+
+```typescript
+const d = new Diagram();
+const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
+const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
+const cache = d.addBox("Redis", { row: 1, col: 2, color: "cache" });
+d.connect(api, db, "queries");
+d.connect(api, cache, "reads", { style: "dashed" });
+d.addGroup("Data Layer", [db, cache]);
+return d.render({ format: "url" });
+```

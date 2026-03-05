@@ -13,7 +13,9 @@
     "build:wasm": "cd wasm && zig build",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "docs:dev": "cd docs && npx astro dev",
+    "docs:build": "cd docs && npx astro build"
   },
   "keywords": [
     "mcp",

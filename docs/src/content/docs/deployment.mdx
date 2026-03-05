@@ -1,0 +1,93 @@
+---
+title: Deployment
+description: Deploy drawmode locally or to Cloudflare Workers.
+---
+
+## Local (stdio)
+
+For Claude Code, Claude Desktop, and Cursor — the MCP server communicates over stdio:
+
+```bash
+npx drawmode --stdio
+```
+
+Configure your client:
+
+```json
+{
+  "mcpServers": {
+    "drawmode": {
+      "command": "npx",
+      "args": ["drawmode", "--stdio"]
+    }
+  }
+}
+```
+
+## Local (HTTP)
+
+Streamable HTTP server on port 3001:
+
+```bash
+npx drawmode
+```
+
+Useful for development and testing with HTTP-based MCP clients.
+
+## Cloudflare Workers
+
+Deploy the `worker/` directory to Cloudflare Workers for remote MCP access:
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/teamchong/drawmode/tree/main/worker)
+
+### Manual Deployment
+
+```bash
+cd worker
+npx wrangler deploy
+```
+
+### Worker Requirements
+
+The Worker requires these compatibility flags in `wrangler.toml`:
+
+- `nodejs_compat` — Node.js API compatibility
+- `unsafe_eval` — required for `new Function()` code execution
+
+### PNG Export on Workers
+
+The Worker supports PNG export via [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) — headless Chromium on the edge renders pixel-perfect PNGs using the Excalidraw renderer.
+
+- Free tier includes 10 minutes/day of browser rendering time
+- For local dev with browser rendering: `cd worker && npx wrangler dev --remote`
+
+## PNG/SVG Export (Local)
+
+Local PNG and SVG export requires [puppeteer](https://pptr.dev/):
+
+```bash
+npm install puppeteer
+```
+
+puppeteer is listed in `optionalDependencies` — if not installed, PNG/SVG export gracefully fails and other formats continue to work.
+
+The export pipeline:
+1. Launches headless Chrome via puppeteer
+2. Loads `@excalidraw/excalidraw@0.17.6` from CDN
+3. Calls `ExcalidrawLib.exportToSvg()` with the diagram elements
+4. **PNG**: Renders SVG to canvas at 2x resolution, exports as PNG
+5. **SVG**: Serializes the SVG element directly
+
+## Publishing
+
+### npm
+
+```bash
+npm publish
+```
+
+Users install via `npx drawmode`.
+
+### MCP Registry
+
+Publish to `registry.modelcontextprotocol.io` for auto-indexing by PulseMCP and Smithery.

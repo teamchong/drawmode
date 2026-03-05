@@ -1,0 +1,132 @@
+---
+title: Architecture
+description: How drawmode works — execution pipeline, layout engine, and WASM validation.
+---
+
+## Code Mode Pattern
+
+drawmode exposes a single `draw` MCP tool. The LLM writes TypeScript code against the Diagram SDK:
+
+1. LLM receives one tool (`draw`) with SDK type definitions (~100 lines)
+2. LLM writes code using the `Diagram` class
+3. `executor.ts` runs code via `new Function("Diagram", code)` with a `ConfiguredDiagram` subclass
+4. Graphviz (`@hpcc-js/wasm-graphviz`) handles layout positioning and arrow routing via the `dot` engine
+5. Zig WASM handles validation (layout fallback if Graphviz unavailable)
+6. Output: `.excalidraw` file, excalidraw.com URL, `.png` file, or `.svg` file
+
+## Project Structure
+
+```
+drawmode/
+├── src/                     # TypeScript (MCP server + SDK)
+│   ├── index.ts             # MCP server entry point (stdio + HTTP)
+│   ├── sdk.ts               # Diagram SDK (addBox, connect, render, etc.)
+│   ├── executor.ts          # Local executor (new Function + Diagram subclass)
+│   ├── layout.ts            # Layout bridge (Graphviz primary, Zig WASM fallback)
+│   ├── upload.ts            # Excalidraw.com upload (encrypt + POST)
+│   ├── png.ts               # Image export (PNG/SVG via puppeteer + Excalidraw CDN)
+│   ├── types.ts             # Shared types (ColorPreset, ShapeOpts, ConnectOpts, etc.)
+│   └── widget.html          # MCP Apps HTML widget for Claude Desktop/Cowork
+├── wasm/                    # Zig WASM module
+│   ├── src/
+│   │   ├── main.zig         # WASM exports (alloc, resetHeap, layoutGraph, routeArrows, validate)
+│   │   ├── layout.zig       # Grid layout fallback
+│   │   ├── arrows.zig       # Arrow routing (unused — Graphviz handles routing)
+│   │   ├── validate.zig     # Structural validation
+│   │   └── util.zig         # Shared utilities
+│   └── build.zig
+├── worker/                  # Cloudflare Worker entry point (remote MCP)
+│   ├── index.ts
+│   └── wrangler.toml
+├── package.json
+└── tsconfig.json
+```
+
+## Layout Engine: Graphviz
+
+The primary layout engine is Graphviz via `@hpcc-js/wasm-graphviz` — the real Graphviz C library compiled to WASM.
+
+- **`dot` layout**: Layered graph layout (Sugiyama algorithm) with proper crossing minimization
+- **`splines=ortho`**: Orthogonal edge routing (90-degree elbows matching Excalidraw style), falls back to `splines=polyline` if ortho fails
+- **Cluster subgraphs**: Groups rendered as Graphviz clusters for proper containment
+- **`rank=same`**: Nodes with same `row` value share a rank in the layout
+- **Coordinate conversion**: Graphviz points (Y-up) → Excalidraw pixels (Y-down)
+
+### Fallback Chain
+
+```
+Graphviz → Zig WASM grid → TypeScript grid
+```
+
+If Graphviz is unavailable, layout falls back to the Zig WASM grid layout module, then to a pure TypeScript grid implementation.
+
+## Zig WASM Module
+
+The Zig WASM module handles validation and provides a grid layout fallback:
+
+**WASM exports:**
+
+| Export | Description |
+|--------|-------------|
+| `layoutGraph` | Grid layout fallback (when Graphviz unavailable) |
+| `routeArrows` | Arrow routing (exists but unused — Graphviz handles routing) |
+| `validate` | Structural validation (bound text, duplicate IDs, overlapping elements) |
+
+Input/output is JSON bytes — the TypeScript layer serializes to JSON, passes to WASM, and reads back results.
+
+### Validation Checks
+
+- Bound text elements have matching containers
+- No duplicate element IDs
+- Arrow endpoints reference valid elements
+- No overlapping elements
+
+## Excalidraw JSON Internals
+
+The SDK handles these Excalidraw quirks so the LLM doesn't have to:
+
+- Labels need **two elements**: shape with `boundElements` + text with `containerId`
+- The `label` property does NOT work in raw JSON
+- Elbow arrows need: `elbowed: true`, `roundness: null`, `roughness: 0`
+- Arrow x,y must be on source shape edge, not center
+- Multiple arrows from same edge must be staggered (20%, 35%, 50%, 65%, 80%)
+
+## Image Export Pipeline
+
+PNG and SVG export uses headless Chrome (puppeteer) to load the Excalidraw library from CDN and call `ExcalidrawLib.exportToSvg()` — the same rendering pipeline as the Excalidraw web app.
+
+- **PNG**: SVG → canvas at 2x resolution → `toDataURL("image/png")`
+- **SVG**: Direct `XMLSerializer.serializeToString()` of the SVG element
+- **CDN**: Pinned to `@excalidraw/excalidraw@0.17.6`
+- **Optional**: `puppeteer` is in `optionalDependencies` — PNG/SVG export gracefully fails if not installed
+
+![Architecture diagram](/architecture.png)
+
+## Dependencies
+
+### TypeScript
+
+| Package | Purpose |
+|---------|---------|
+| `@modelcontextprotocol/sdk` | MCP protocol (McpServer, transports) |
+| `@hpcc-js/wasm-graphviz` | Graphviz C library compiled to WASM |
+| `zod` | Schema validation for MCP tool parameters |
+| `puppeteer` (optional) | Headless Chrome for PNG/SVG export |
+
+### Zig
+
+No external dependencies. Standard library only.
+
+## Development
+
+```bash
+pnpm install              # Install dependencies
+pnpm build                # Build TS + WASM (Zig failure non-fatal)
+pnpm build:wasm           # Build WASM module only
+pnpm dev                  # Dev server (HTTP mode)
+pnpm test                 # Run tests
+pnpm typecheck            # TypeScript type checking
+
+cd wasm && zig build       # Build WASM module only
+cd wasm && zig build test  # Run Zig tests
+```

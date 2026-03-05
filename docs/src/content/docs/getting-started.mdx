@@ -1,0 +1,100 @@
+---
+title: Getting Started
+description: Install drawmode and generate your first diagram.
+---
+
+## Installation
+
+drawmode runs as an MCP server. No separate install is needed — `npx` handles it.
+
+```bash
+# Claude Code / Cursor (stdio mode)
+npx drawmode --stdio
+
+# HTTP mode (Streamable HTTP on port 3001)
+npx drawmode
+```
+
+## Client Configuration
+
+### Claude Code
+
+Add to your Claude Code MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "drawmode": {
+      "command": "npx",
+      "args": ["drawmode", "--stdio"]
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Add the same config to Claude Desktop's MCP settings file:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "drawmode": {
+      "command": "npx",
+      "args": ["drawmode", "--stdio"]
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to Cursor's MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "drawmode": {
+      "command": "npx",
+      "args": ["drawmode", "--stdio"]
+    }
+  }
+}
+```
+
+## Your First Diagram
+
+Once configured, ask your LLM to draw a diagram. The LLM receives a single `draw` tool and writes TypeScript code against the Diagram SDK:
+
+```typescript
+const d = new Diagram();
+const web = d.addBox("Web App", { row: 0, col: 0, color: "frontend" });
+const api = d.addBox("API Server", { row: 0, col: 1, color: "backend" });
+const db = d.addBox("Database", { row: 1, col: 1, color: "database" });
+d.connect(web, api, "REST");
+d.connect(api, db, "queries");
+return d.render({ format: "url" });
+```
+
+This produces a shareable excalidraw.com URL with the rendered diagram.
+
+## Output Formats
+
+| Format | Description | Works in |
+|--------|-------------|----------|
+| `excalidraw` | `.excalidraw` JSON file | Claude Code, Cursor, VS Code |
+| `url` | Shareable excalidraw.com link | All clients |
+| `png` | PNG image (requires puppeteer) | Local with puppeteer, Cloudflare Worker |
+| `svg` | SVG markup | Local with puppeteer |
+
+## How It Works
+
+1. LLM receives one tool (`draw`) with TypeScript type definitions
+2. LLM writes code against the `Diagram` SDK
+3. Executor runs the code — SDK handles labels, colors, IDs
+4. Graphviz `dot` engine handles layout positioning and edge routing
+5. Zig WASM handles validation
+6. Output: `.excalidraw` file, excalidraw.com URL, PNG, or SVG
