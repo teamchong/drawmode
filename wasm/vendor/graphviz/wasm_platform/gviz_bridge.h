@@ -46,6 +46,8 @@ gviz_edge_t gviz_add_edge(gviz_graph_t g, gviz_node_t tail, gviz_node_t head, co
 void gviz_set_default_node_attr(gviz_graph_t g, const char *name, const char *value);
 void gviz_set_graph_attr(gviz_graph_t g, const char *name, const char *value);
 void gviz_set_node_attr(gviz_graph_t g, gviz_node_t n, const char *name, const char *value);
+void gviz_set_default_edge_attr(gviz_graph_t g, const char *name, const char *value);
+void gviz_set_edge_attr(gviz_graph_t g, gviz_edge_t e, const char *name, const char *value);
 
 /* Subgraph (cluster) construction */
 gviz_graph_t gviz_add_subgraph(gviz_graph_t g, const char *name);
@@ -71,6 +73,9 @@ gviz_node_t gviz_edge_tail(gviz_edge_t e);
 
 /* Edge spline data */
 int gviz_edge_spline(gviz_edge_t e, gviz_spline_t *out);
+
+/* Edge label position (after layout) — returns 1 if label exists, 0 otherwise */
+int gviz_edge_label_pos(gviz_edge_t e, double *x, double *y);
 
 /* Graph bounding box */
 gviz_bbox_t gviz_graph_bbox(gviz_graph_t g);

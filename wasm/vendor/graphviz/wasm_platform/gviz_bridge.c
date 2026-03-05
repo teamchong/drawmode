@@ -51,6 +51,15 @@ void gviz_set_node_attr(gviz_graph_t g, gviz_node_t n, const char *name, const c
     agsafeset((Agnode_t*)n, (char*)name, (char*)value, (char*)"");
 }
 
+void gviz_set_default_edge_attr(gviz_graph_t g, const char *name, const char *value) {
+    agattr((Agraph_t*)g, AGEDGE, (char*)name, (char*)value);
+}
+
+void gviz_set_edge_attr(gviz_graph_t g, gviz_edge_t e, const char *name, const char *value) {
+    (void)g;
+    agsafeset((Agedge_t*)e, (char*)name, (char*)value, (char*)"");
+}
+
 gviz_graph_t gviz_add_subgraph(gviz_graph_t g, const char *name) {
     return (gviz_graph_t)agsubg((Agraph_t*)g, (char*)name, 1);
 }
@@ -107,6 +116,15 @@ gviz_node_t gviz_edge_head(gviz_edge_t e) {
 
 gviz_node_t gviz_edge_tail(gviz_edge_t e) {
     return (gviz_node_t)agtail((Agedge_t*)e);
+}
+
+int gviz_edge_label_pos(gviz_edge_t e, double *x, double *y) {
+    Agedge_t *edge = (Agedge_t*)e;
+    textlabel_t *lp = ED_label(edge);
+    if (!lp) return 0;
+    *x = lp->pos.x;
+    *y = lp->pos.y;
+    return 1;
 }
 
 int gviz_edge_spline(gviz_edge_t e, gviz_spline_t *out) {

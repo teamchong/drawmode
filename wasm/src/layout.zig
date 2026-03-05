@@ -40,6 +40,9 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
     c.gviz_set_default_node_attr(graph, "height", "");
     c.gviz_set_default_node_attr(graph, "fixedsize", "");
 
+    // Set default edge attribute so per-edge label agsafeset works
+    c.gviz_set_default_edge_attr(graph, "label", "");
+
     // Create nodes with size attributes
     var node_ptrs: [MAX_NODES]?*anyopaque = undefined;
     for (nodes[0..node_count], 0..) |n, i| {
@@ -104,7 +107,8 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
         }
     }
 
-    // Create edges
+    // Create edges (store pointers for reading label positions back)
+    var edge_ptrs: [MAX_EDGES]?*anyopaque = undefined;
     for (edges[0..edge_count], 0..) |e, ei| {
         // Find source and target node pointers
         var from_ptr: ?*anyopaque = null;
@@ -113,13 +117,25 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
             if (std.mem.eql(u8, n.id_slice, e.from_slice)) from_ptr = node_ptrs[ni];
             if (std.mem.eql(u8, n.id_slice, e.to_slice)) to_ptr = node_ptrs[ni];
         }
-        if (from_ptr == null or to_ptr == null) continue;
+        if (from_ptr == null or to_ptr == null) {
+            edge_ptrs[ei] = null;
+            continue;
+        }
 
         // Edge name for uniqueness
         var edge_name: [32]u8 = undefined;
         const elen = writeInt(&edge_name, @intCast(ei));
         edge_name[elen] = 0;
-        _ = c.gviz_add_edge(graph, from_ptr.?, to_ptr.?, @ptrCast(&edge_name));
+        const edge_ptr = c.gviz_add_edge(graph, from_ptr.?, to_ptr.?, @ptrCast(&edge_name));
+        edge_ptrs[ei] = edge_ptr;
+
+        // Pass label to Graphviz so it computes label placement natively
+        if (e.label_slice.len > 0) {
+            if (edge_ptr) |ep| {
+                const label_z = nullTerminate(e.label_slice) orelse continue;
+                c.gviz_set_edge_attr(graph, ep, "label", label_z);
+            }
+        }
     }
 
     // Create GVC context with dot_layout plugin
@@ -136,7 +152,7 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
     }
 
     // Extract positions and write JSON output (including cluster bounding boxes)
-    const result = writeGraphvizOutput(out, graph, gvc, &nodes, node_count, &edges, edge_count, &groups, group_count, &cluster_ptrs);
+    const result = writeGraphvizOutput(out, graph, gvc, &nodes, node_count, &edges, edge_count, &groups, group_count, &cluster_ptrs, &edge_ptrs);
 
     // Cleanup
     c.gviz_free_layout(gvc, graph);
@@ -183,6 +199,8 @@ pub const c = if (is_wasm) struct {
     pub extern fn gviz_set_default_node_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
     pub extern fn gviz_set_graph_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
     pub extern fn gviz_set_node_attr(g: ?*anyopaque, n: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
+    pub extern fn gviz_set_default_edge_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
+    pub extern fn gviz_set_edge_attr(g: ?*anyopaque, e: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
 
     // Cluster subgraphs
     pub extern fn gviz_add_subgraph(g: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
@@ -207,6 +225,7 @@ pub const c = if (is_wasm) struct {
     pub extern fn gviz_edge_head(e: ?*anyopaque) ?*anyopaque;
     pub extern fn gviz_edge_tail(e: ?*anyopaque) ?*anyopaque;
     pub extern fn gviz_edge_spline(e: ?*anyopaque, out: *GvizSpline) c_int;
+    pub extern fn gviz_edge_label_pos(e: ?*anyopaque, x: *f64, y: *f64) c_int;
     pub extern fn gviz_graph_bbox(g: ?*anyopaque) GvizBbox;
 } else struct {
     pub fn gviz_graph_new(_: [*:0]const u8) ?*anyopaque { return null; }
@@ -215,6 +234,8 @@ pub const c = if (is_wasm) struct {
     pub fn gviz_set_default_node_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_set_graph_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_set_node_attr(_: ?*anyopaque, _: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
+    pub fn gviz_set_default_edge_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
+    pub fn gviz_set_edge_attr(_: ?*anyopaque, _: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_add_subgraph(_: ?*anyopaque, _: [*:0]const u8) ?*anyopaque { return null; }
     pub fn gviz_subgraph_add_node(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
     pub fn gviz_context_new() ?*anyopaque { return null; }
@@ -231,6 +252,7 @@ pub const c = if (is_wasm) struct {
     pub fn gviz_edge_head(_: ?*anyopaque) ?*anyopaque { return null; }
     pub fn gviz_edge_tail(_: ?*anyopaque) ?*anyopaque { return null; }
     pub fn gviz_edge_spline(_: ?*anyopaque, _: *GvizSpline) c_int { return 0; }
+    pub fn gviz_edge_label_pos(_: ?*anyopaque, _: *f64, _: *f64) c_int { return 0; }
     pub fn gviz_graph_bbox(_: ?*anyopaque) GvizBbox { return .{ .ll_x = 0, .ll_y = 0, .ur_x = 0, .ur_y = 0 }; }
 };
 
@@ -264,7 +286,7 @@ const Group = struct {
 
 // ── Output: Extract Graphviz Layout Results ──
 
-fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX_NODES]Node, node_count: usize, edges: *[MAX_EDGES]Edge, edge_count: usize, groups: *[MAX_GROUPS]Group, group_count: usize, cluster_ptrs: *[MAX_GROUPS]?*anyopaque) usize {
+fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX_NODES]Node, node_count: usize, edges: *[MAX_EDGES]Edge, edge_count: usize, groups: *[MAX_GROUPS]Group, group_count: usize, cluster_ptrs: *[MAX_GROUPS]?*anyopaque, edge_ptrs: *[MAX_EDGES]?*anyopaque) usize {
     var w: usize = 0;
 
     // Get bounding box for Y-flip (Graphviz Y-up → Excalidraw Y-down)
@@ -320,14 +342,12 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
 
     w += copySlice(out[w..], "],\"edges\":[");
 
-    // First pass: extract all edge splines and compute label positions
+    // Extract edge splines and label positions from Graphviz
     const EdgeInfo = struct {
         spline: SplineResult,
         edge_idx: usize,
         label_x: i32,
         label_y: i32,
-        label_w: i32,
-        label_h: i32,
         has_label: bool,
     };
     var edge_infos: [MAX_EDGES]EdgeInfo = undefined;
@@ -342,61 +362,37 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
             .edge_idx = ei,
             .label_x = 0,
             .label_y = 0,
-            .label_w = 0,
-            .label_h = 24,
             .has_label = e.label_slice.len > 0,
         };
 
-        // Compute label position at midpoint of longest segment
+        // Read label position from Graphviz (computed natively during layout)
         if (info.has_label) {
-            var best_len: i32 = 0;
-            var best_seg: usize = 0;
-            var s: usize = 0;
-            while (s + 1 < spline.point_count) : (s += 1) {
-                const dx = absInt(spline.points_x[s + 1] - spline.points_x[s]);
-                const dy = absInt(spline.points_y[s + 1] - spline.points_y[s]);
-                const seg_len = dx + dy;
-                if (seg_len > best_len) { best_len = seg_len; best_seg = s; }
+            if (edge_ptrs[ei]) |ep| {
+                var lx: f64 = 0;
+                var ly: f64 = 0;
+                if (c.gviz_edge_label_pos(ep, &lx, &ly) != 0) {
+                    // Graphviz Y-up → Excalidraw Y-down
+                    info.label_x = @intFromFloat(lx);
+                    info.label_y = @intFromFloat(y_max - ly);
+                } else {
+                    // Fallback: midpoint of longest segment
+                    var best_len: i32 = 0;
+                    var best_seg: usize = 0;
+                    var s: usize = 0;
+                    while (s + 1 < spline.point_count) : (s += 1) {
+                        const dx = absInt(spline.points_x[s + 1] - spline.points_x[s]);
+                        const dy = absInt(spline.points_y[s + 1] - spline.points_y[s]);
+                        const seg_len = dx + dy;
+                        if (seg_len > best_len) { best_len = seg_len; best_seg = s; }
+                    }
+                    info.label_x = @divTrunc(spline.points_x[best_seg] + spline.points_x[best_seg + 1], 2);
+                    info.label_y = @divTrunc(spline.points_y[best_seg] + spline.points_y[best_seg + 1], 2);
+                }
             }
-            info.label_x = @divTrunc(spline.points_x[best_seg] + spline.points_x[best_seg + 1], 2);
-            info.label_y = @divTrunc(spline.points_y[best_seg] + spline.points_y[best_seg + 1], 2);
-            // Estimate label width: ~8px per char + 16px padding
-            info.label_w = @as(i32, @intCast(e.label_slice.len)) * 8 + 16;
         }
 
         edge_infos[edge_info_count] = info;
         edge_info_count += 1;
-    }
-
-    // Label collision detection: shift overlapping labels apart.
-    // Uses center-based positions with a minimum gap between labels.
-    const MIN_LABEL_GAP = 24; // minimum pixels between adjacent labels
-    var pass: usize = 0;
-    while (pass < 5) : (pass += 1) {
-        var shifted = false;
-        for (0..edge_info_count) |i| {
-            if (!edge_infos[i].has_label) continue;
-            for (0..i) |j| {
-                if (!edge_infos[j].has_label) continue;
-                // Check if labels are too close (overlap or within MIN_LABEL_GAP)
-                const half_gap = @divTrunc(MIN_LABEL_GAP, 2);
-                const ix1 = edge_infos[i].label_x - @divTrunc(edge_infos[i].label_w, 2) - half_gap;
-                const ix2 = edge_infos[i].label_x + @divTrunc(edge_infos[i].label_w, 2) + half_gap;
-                const iy1 = edge_infos[i].label_y - @divTrunc(edge_infos[i].label_h, 2) - half_gap;
-                const iy2 = edge_infos[i].label_y + @divTrunc(edge_infos[i].label_h, 2) + half_gap;
-                const jx1 = edge_infos[j].label_x - @divTrunc(edge_infos[j].label_w, 2) - half_gap;
-                const jx2 = edge_infos[j].label_x + @divTrunc(edge_infos[j].label_w, 2) + half_gap;
-                const jy1 = edge_infos[j].label_y - @divTrunc(edge_infos[j].label_h, 2) - half_gap;
-                const jy2 = edge_infos[j].label_y + @divTrunc(edge_infos[j].label_h, 2) + half_gap;
-
-                if (ix1 < jx2 and ix2 > jx1 and iy1 < jy2 and iy2 > jy1) {
-                    // Too close — shift label i down below label j (with gap)
-                    edge_infos[i].label_y = edge_infos[j].label_y + @divTrunc(edge_infos[j].label_h, 2) + @divTrunc(edge_infos[i].label_h, 2) + MIN_LABEL_GAP;
-                    shifted = true;
-                }
-            }
-        }
-        if (!shifted) break;
     }
 
     // Second pass: write edge JSON with label positions
