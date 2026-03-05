@@ -33,10 +33,32 @@ function getLineHeight(fontFamily: FontFamily): number {
 }
 
 const SESSION_SEED = Date.now().toString(36);
-let globalIdCounter = 0;
 
 function randSeed(): number {
   return Math.floor(Math.random() * 2000000000);
+}
+
+function computeNodeBounds(nodes: { x?: number; y?: number; width: number; height: number }[]): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of nodes) {
+    const nx = n.x ?? 0, ny = n.y ?? 0;
+    if (nx < minX) minX = nx;
+    if (ny < minY) minY = ny;
+    if (nx + n.width > maxX) maxX = nx + n.width;
+    if (ny + n.height > maxY) maxY = ny + n.height;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function computeBounds(points: number[][]): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p[0] < minX) minX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] > maxY) maxY = p[1];
+  }
+  return { minX, minY, maxX, maxY };
 }
 
 export class Diagram {
@@ -49,7 +71,7 @@ export class Diagram {
   private idCounter = 0;
 
   private nextId(prefix: string): string {
-    return `${prefix}_${++this.idCounter}_${SESSION_SEED}_${++globalIdCounter}`;
+    return `${prefix}_${++this.idCounter}_${SESSION_SEED}`;
   }
 
   /** Add a rectangle to the diagram. Returns the element ID. */
@@ -118,14 +140,7 @@ export class Diagram {
   }): string {
     if (points.length < 2) throw new Error("addLine requires at least two points");
     const id = this.nextId("line");
-    // Compute bounding box in single pass
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const [px, py] of points) {
-      if (px < minX) minX = px;
-      if (py < minY) minY = py;
-      if (px > maxX) maxX = px;
-      if (py > maxY) maxY = py;
-    }
+    const { minX, minY, maxX, maxY } = computeBounds(points);
     this.nodes.set(id, {
       id, label: "", type: "line",
       width: maxX - minX || 1,
@@ -441,8 +456,8 @@ export class Diagram {
               }
             }
           }
-        } catch {
-          // ignore parse errors
+        } catch (e) {
+          if (typeof process !== "undefined") process.stderr.write(`[drawmode] validation parse error: ${e}\n`);
         }
       }
     }
@@ -722,13 +737,7 @@ export class Diagram {
       const startFixedPoint: [number, number] = edgeRoute?.startFixedPoint ?? [0.5, 0.5];
       const endFixedPoint: [number, number] = edgeRoute?.endFixedPoint ?? [0.5, 0.5];
 
-      let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
-      for (const p of points) {
-        if (p[0] < bMinX) bMinX = p[0];
-        if (p[0] > bMaxX) bMaxX = p[0];
-        if (p[1] < bMinY) bMinY = p[1];
-        if (p[1] > bMaxY) bMaxY = p[1];
-      }
+      const { minX: bMinX, minY: bMinY, maxX: bMaxX, maxY: bMaxY } = computeBounds(points);
       const boundsWidth = bMaxX - bMinX;
       const boundsHeight = bMaxY - bMinY;
 
@@ -878,13 +887,7 @@ export class Diagram {
         if (childNodes.length === 0) continue;
 
         const padding = 30;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const n of childNodes) {
-          if (n.x! < minX) minX = n.x!;
-          if (n.y! < minY) minY = n.y!;
-          if (n.x! + n.width > maxX) maxX = n.x! + n.width;
-          if (n.y! + n.height > maxY) maxY = n.y! + n.height;
-        }
+        const { minX, minY, maxX, maxY } = computeNodeBounds(childNodes);
         gx = minX - padding;
         gy = minY - padding - 20;
         gw = (maxX + padding) - gx;
@@ -959,13 +962,7 @@ export class Diagram {
       if (childNodes.length === 0) continue;
 
       const padding = 30;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const n of childNodes) {
-        if (n.x! < minX) minX = n.x!;
-        if (n.y! < minY) minY = n.y!;
-        if (n.x! + n.width > maxX) maxX = n.x! + n.width;
-        if (n.y! + n.height > maxY) maxY = n.y! + n.height;
-      }
+      let { minX, minY, maxX, maxY } = computeNodeBounds(childNodes);
       minX -= padding;
       minY -= padding + 20;
       maxX += padding;

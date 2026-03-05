@@ -13,7 +13,13 @@
 import { Diagram } from "../src/sdk.js";
 import type { RenderOpts, RenderResult } from "../src/types.js";
 import { buildRenderHTML } from "../src/png.js";
+import { SDK_TYPES } from "../src/sdk-types.js";
 import puppeteer from "@cloudflare/puppeteer";
+
+const corsHeaders = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+} as const;
 
 interface Env {
   MYBROWSER: Fetcher;
@@ -44,77 +50,6 @@ async function renderPng(elements: unknown[], env: Env): Promise<string | null> 
     if (browser) await browser.close();
   }
 }
-
-const SDK_TYPES = `
-type FillStyle = "solid" | "hachure" | "cross-hatch" | "zigzag";
-type StrokeStyle = "solid" | "dashed" | "dotted";
-type FontFamily = 1 | 2 | 3;  // Virgil / Helvetica / Cascadia
-type Arrowhead = null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";
-type TextAlign = "left" | "center" | "right";
-type VerticalAlign = "top" | "middle";
-
-type ColorPreset =
-  | "frontend" | "backend" | "database" | "storage" | "ai" | "external" | "orchestration" | "queue" | "cache" | "users"
-  | "aws-compute" | "aws-storage" | "aws-database" | "aws-network" | "aws-security" | "aws-ml"
-  | "azure-compute" | "azure-data" | "azure-network" | "azure-ai"
-  | "gcp-compute" | "gcp-data" | "gcp-network" | "gcp-ai"
-  | "k8s-pod" | "k8s-service" | "k8s-ingress" | "k8s-volume";
-
-interface ShapeOpts {
-  row?: number; col?: number;
-  color?: ColorPreset;
-  width?: number; height?: number;
-  x?: number; y?: number;
-  strokeColor?: string;
-  backgroundColor?: string;
-  fillStyle?: FillStyle;
-  strokeWidth?: number;
-  strokeStyle?: StrokeStyle;
-  roughness?: number;
-  opacity?: number;
-  roundness?: { type: number } | null;
-  fontSize?: number;
-  fontFamily?: FontFamily;
-  textAlign?: TextAlign;
-  verticalAlign?: VerticalAlign;
-  link?: string | null;
-  customData?: Record<string, unknown> | null;
-}
-
-interface ConnectOpts {
-  style?: StrokeStyle;
-  strokeColor?: string;
-  strokeWidth?: number;
-  roughness?: number;
-  opacity?: number;
-  startArrowhead?: Arrowhead;
-  endArrowhead?: Arrowhead;
-  elbowed?: boolean;
-  labelFontSize?: number;
-  customData?: Record<string, unknown> | null;
-}
-
-declare class Diagram {
-  addBox(label: string, opts?: ShapeOpts): string;
-  addEllipse(label: string, opts?: ShapeOpts): string;
-  addDiamond(label: string, opts?: ShapeOpts): string;
-  addText(text: string, opts?: { x?: number; y?: number; fontSize?: number; fontFamily?: FontFamily; color?: ColorPreset; strokeColor?: string }): string;
-  addLine(points: [number, number][], opts?: { strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle }): string;
-  addGroup(label: string, children: string[]): string;
-  addFrame(name: string, children: string[]): string;
-  removeGroup(id: string): void;
-  removeFrame(id: string): void;
-  connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
-  findByLabel(label: string, opts?: { exact?: boolean }): string[];
-  getNodes(): string[];
-  getEdges(): Array<{ from: string; to: string; label?: string }>;
-  updateNode(id: string, opts: Partial<ShapeOpts> & { label?: string }): void;
-  updateEdge(from: string, to: string, update: Partial<ConnectOpts> & { label?: string }, matchLabel?: string): void;
-  removeNode(id: string): void;
-  removeEdge(from: string, to: string, label?: string): void;
-  render(opts?: { format?: "url" | "png" }): Promise<{ json: object; url?: string }>;
-}
-`;
 
 async function executeCodeInWorker(code: string, renderOpts: RenderOpts): Promise<{ result: { json: object; url?: string; filePath?: string }; error?: string }> {
   try {
@@ -179,12 +114,7 @@ export default {
               serverInfo: { name: "drawmode", version: "0.1.0" },
               capabilities: { tools: {} },
             },
-          }, {
-            headers: {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*",
-            },
-          });
+          }, { headers: corsHeaders });
         }
 
         if (body.method === "tools/list") {
@@ -213,12 +143,7 @@ export default {
                 },
               ],
             },
-          }, {
-            headers: {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*",
-            },
-          });
+          }, { headers: corsHeaders });
         }
 
         if (body.method === "tools/call") {
@@ -228,8 +153,7 @@ export default {
 
           if (toolName === "draw") {
             const code = args.code as string;
-            const requestedFormat = (args.format as string) ?? "url";
-            const wantsPng = requestedFormat === "png";
+            const wantsPng = (args.format as string) === "png";
             // Always build as "url" internally — PNG is a post-processing step
             const { result, error } = await executeCodeInWorker(code, { format: "url" });
 
@@ -241,9 +165,7 @@ export default {
                   content: [{ type: "text", text: `Error: ${error}` }],
                   isError: true,
                 },
-              }, {
-                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-              });
+              }, { headers: corsHeaders });
             }
 
             const elements = Array.isArray((result.json as { elements?: unknown[] }).elements)
@@ -279,9 +201,7 @@ export default {
               jsonrpc: "2.0",
               id: body.id,
               result: { content: parts },
-            }, {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-            });
+            }, { headers: corsHeaders });
           }
 
           if (toolName === "draw_info") {
@@ -294,18 +214,14 @@ export default {
                   text: `drawmode — Code Mode MCP for Excalidraw diagrams (Worker mode)\n\nColor presets: frontend, backend, database, storage, ai, external, orchestration, queue, cache, users\n\n${SDK_TYPES}\n\nWASM layout: not available (Worker mode)`,
                 }],
               },
-            }, {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-            });
+            }, { headers: corsHeaders });
           }
 
           return Response.json({
             jsonrpc: "2.0",
             id: body.id,
             error: { code: -32601, message: `Unknown tool: ${toolName}` },
-          }, {
-            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-          });
+          }, { headers: corsHeaders });
         }
 
         // JSON-RPC notifications (no id) should be silently accepted
@@ -317,9 +233,7 @@ export default {
           jsonrpc: "2.0",
           id: body.id,
           error: { code: -32601, message: `Method not found: ${body.method}` },
-        }, {
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-        });
+        }, { headers: corsHeaders });
       } catch (e: unknown) {
         const message = e instanceof Error ? e.message : String(e);
         return Response.json({ jsonrpc: "2.0", error: { code: -32603, message } }, { status: 500 });
