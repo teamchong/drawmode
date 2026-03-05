@@ -59,6 +59,24 @@ interface WasmLayoutExports {
 
 let wasmInstance: WasmLayoutExports | null = null;
 
+const WasmLayoutOutputSchema = z.object({
+  nodes: z.array(z.object({ id: z.string(), x: z.number(), y: z.number() })),
+  edges: z.array(z.object({
+    from: z.string(),
+    to: z.string(),
+    points: z.array(z.tuple([z.number(), z.number()])),
+    startFixedPoint: z.tuple([z.number(), z.number()]).optional(),
+    endFixedPoint: z.tuple([z.number(), z.number()]).optional(),
+    labelX: z.number().optional(),
+    labelY: z.number().optional(),
+  })).optional(),
+  groups: z.array(z.object({
+    id: z.string(),
+    x: z.number(), y: z.number(),
+    width: z.number(), height: z.number(),
+  })).optional(),
+});
+
 export async function loadWasm(wasmPath?: string): Promise<void> {
   try {
     const { readFile } = await import("node:fs/promises");
@@ -149,8 +167,7 @@ function callWasm(
   const inPtr = writeToWasm(inBytes);
   const outPtr = wasmInstance.alloc(outCap);
   const written = fn(inPtr, inBytes.byteLength, outPtr, outCap);
-  const result = written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
-  return result;
+  return written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
 }
 
 /**
@@ -197,24 +214,6 @@ export async function layoutGraphWasm(
   );
 
   if (written === 0) return null;
-
-  const WasmLayoutOutputSchema = z.object({
-    nodes: z.array(z.object({ id: z.string(), x: z.number(), y: z.number() })),
-    edges: z.array(z.object({
-      from: z.string(),
-      to: z.string(),
-      points: z.array(z.tuple([z.number(), z.number()])),
-      startFixedPoint: z.tuple([z.number(), z.number()]).optional(),
-      endFixedPoint: z.tuple([z.number(), z.number()]).optional(),
-      labelX: z.number().optional(),
-      labelY: z.number().optional(),
-    })).optional(),
-    groups: z.array(z.object({
-      id: z.string(),
-      x: z.number(), y: z.number(),
-      width: z.number(), height: z.number(),
-    })).optional(),
-  });
 
   try {
     const resultStr = new TextDecoder().decode(readFromWasm(outPtr, written));

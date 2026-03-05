@@ -15,7 +15,6 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { executeCode } from "./executor.js";
 import { loadWasm, isWasmLoaded } from "./layout.js";
-import { Diagram } from "./sdk.js";
 import { SDK_TYPES } from "./sdk-types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

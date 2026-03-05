@@ -20,8 +20,15 @@ export interface ExecuteResult {
  * Execute LLM-generated TypeScript code that uses the Diagram SDK.
  * The code receives `Diagram` as a global and must return a `RenderResult`
  * (i.e., call `d.render()`).
+ *
+ * `formatMap` coerces output formats — e.g. `{ excalidraw: "url" }` forces
+ * excalidraw format to url (useful when there's no filesystem).
  */
-export async function executeCode(code: string, renderOpts?: RenderOpts): Promise<ExecuteResult> {
+export async function executeCode(
+  code: string,
+  renderOpts?: RenderOpts,
+  formatMap?: Partial<Record<string, string>>,
+): Promise<ExecuteResult> {
   try {
     // Merge sourceCode into renderOpts so render() can write sidecar
     const mergedOpts: RenderOpts = { ...renderOpts, sourceCode: code };
@@ -30,7 +37,11 @@ export async function executeCode(code: string, renderOpts?: RenderOpts): Promis
     // This avoids mutating Diagram.prototype which would stack across concurrent requests.
     class ConfiguredDiagram extends Diagram {
       override async render(opts?: RenderOpts): Promise<RenderResult> {
-        return super.render({ ...mergedOpts, ...opts });
+        const merged = { ...mergedOpts, ...opts };
+        if (formatMap && merged.format && merged.format in formatMap) {
+          merged.format = formatMap[merged.format] as RenderOpts["format"];
+        }
+        return super.render(merged);
       }
     }
 

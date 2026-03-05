@@ -207,14 +207,21 @@ export class Diagram {
       }
     }
 
+    // Index label text elements by their parent ID (e.g. "grp_1-label" → keyed by "grp_1")
+    const labelTextById = new Map<string, ExcalidrawElement>();
+    for (const el of elements) {
+      if (el.type === "text" && el.id.endsWith("-label")) {
+        labelTextById.set(el.id.replace(/-label$/, ""), el);
+      }
+    }
+
     // Pre-detect group IDs so label text nodes can be skipped regardless of element order
     const groupIds = new Set<string>();
     for (const el of elements) {
       if ((el.type === "rectangle" || el.type === "ellipse") &&
           el.strokeStyle === "dashed" && el.backgroundColor === "transparent" &&
           (el.opacity ?? 100) <= 70) {
-        const labelEl = elements.find(e => e.type === "text" && e.id === `${el.id}-label`);
-        if (labelEl) groupIds.add(el.id);
+        if (labelTextById.has(el.id)) groupIds.add(el.id);
       }
     }
 
@@ -224,9 +231,7 @@ export class Diagram {
         // Detect group boundaries: must have companion "-label" text, dashed stroke,
         // transparent background, and low opacity. The "-label" check distinguishes
         // drawmode groups from user shapes that happen to be dashed + low opacity.
-        const labelEl = elements.find(
-          e => e.type === "text" && e.id === `${el.id}-label`,
-        );
+        const labelEl = labelTextById.get(el.id);
         if (el.type !== "diamond" && labelEl && el.strokeStyle === "dashed" &&
             el.backgroundColor === "transparent" && (el.opacity ?? 100) <= 70) {
           d.groups.set(el.id, {
@@ -451,7 +456,7 @@ export class Diagram {
           const errors = JSON.parse(errorsJson);
           if (Array.isArray(errors) && errors.length > 0) {
             for (const err of errors) {
-              if (typeof globalThis.process !== "undefined") {
+              if (typeof process !== "undefined") {
                 process.stderr.write(`[drawmode] validation warning: ${err.msg} (${err.id})\n`);
               }
             }

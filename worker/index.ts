@@ -10,10 +10,10 @@
  * PNG export uses Cloudflare Browser Rendering (puppeteer) when available.
  */
 
-import { Diagram } from "../src/sdk.js";
-import type { RenderOpts, RenderResult } from "../src/types.js";
+import type { RenderOpts } from "../src/types.js";
 import { buildRenderHTML } from "../src/png.js";
 import { SDK_TYPES } from "../src/sdk-types.js";
+import { executeCode } from "../src/executor.js";
 import puppeteer from "@cloudflare/puppeteer";
 
 const corsHeaders = {
@@ -51,44 +51,8 @@ async function renderPng(elements: unknown[], env: Env): Promise<string | null> 
   }
 }
 
-async function executeCodeInWorker(code: string, renderOpts: RenderOpts): Promise<{ result: { json: object; url?: string; filePath?: string }; error?: string }> {
-  try {
-    // Per-execution subclass avoids mutating Diagram.prototype across concurrent requests.
-    // Worker has no filesystem — force file-writing formats to "url".
-    class ConfiguredDiagram extends Diagram {
-      override async render(opts?: RenderOpts): Promise<RenderResult> {
-        const merged = { ...renderOpts, ...opts };
-        if (merged.format === "excalidraw") {
-          merged.format = "url";
-        }
-        return super.render(merged);
-      }
-    }
-
-    const wrappedCode = `
-      return (async () => {
-        ${code}
-      })();
-    `;
-
-    const fn = new Function("Diagram", wrappedCode);
-    const result = await fn(ConfiguredDiagram);
-
-    if (!result || typeof result !== "object") {
-      return {
-        result: { json: {} },
-        error: "Code did not return a RenderResult. Make sure to return d.render().",
-      };
-    }
-
-    return { result };
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : String(e);
-    return { result: { json: {} }, error: message };
-  }
-}
-
-
+/** Worker has no filesystem — coerce excalidraw format to url */
+const WORKER_FORMAT_MAP = { excalidraw: "url" } as const;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -155,7 +119,7 @@ export default {
             const code = args.code as string;
             const wantsPng = (args.format as string) === "png";
             // Always build as "url" internally — PNG is a post-processing step
-            const { result, error } = await executeCodeInWorker(code, { format: "url" });
+            const { result, error } = await executeCode(code, { format: "url" }, WORKER_FORMAT_MAP);
 
             if (error) {
               return Response.json({
