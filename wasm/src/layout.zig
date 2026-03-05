@@ -348,6 +348,7 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
         edge_idx: usize,
         label_x: i32,
         label_y: i32,
+        label_w: i32,
         has_label: bool,
     };
     var edge_infos: [MAX_EDGES]EdgeInfo = undefined;
@@ -362,6 +363,7 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
             .edge_idx = ei,
             .label_x = 0,
             .label_y = 0,
+            .label_w = if (e.label_slice.len > 0) @as(i32, @intCast(e.label_slice.len)) * 8 + 16 else 0,
             .has_label = e.label_slice.len > 0,
         };
 
@@ -393,6 +395,55 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
 
         edge_infos[edge_info_count] = info;
         edge_info_count += 1;
+    }
+
+    // Post-Graphviz collision fix: Graphviz doesn't know actual text widths
+    // (gvtextlayout returns false in WASM), so nearby labels may still overlap.
+    // Push overlapping labels apart on whichever axis needs less movement.
+    const LABEL_H: i32 = 24;
+    const MIN_GAP: i32 = 48;
+    var pass: usize = 0;
+    while (pass < 10) : (pass += 1) {
+        var shifted = false;
+        for (0..edge_info_count) |i| {
+            if (!edge_infos[i].has_label) continue;
+            for (0..i) |j| {
+                if (!edge_infos[j].has_label) continue;
+
+                const i_hw = @divTrunc(edge_infos[i].label_w, 2);
+                const j_hw = @divTrunc(edge_infos[j].label_w, 2);
+                const hh = @divTrunc(LABEL_H, 2);
+
+                // Check bounding-box overlap with gap
+                const x_overlap = (i_hw + j_hw + MIN_GAP) - absInt(edge_infos[i].label_x - edge_infos[j].label_x);
+                const y_overlap = (hh + hh + MIN_GAP) - absInt(edge_infos[i].label_y - edge_infos[j].label_y);
+
+                if (x_overlap > 0 and y_overlap > 0) {
+                    // Push apart on axis needing less movement
+                    if (x_overlap < y_overlap) {
+                        const half = @divTrunc(x_overlap + 1, 2);
+                        if (edge_infos[i].label_x >= edge_infos[j].label_x) {
+                            edge_infos[i].label_x += half;
+                            edge_infos[j].label_x -= half;
+                        } else {
+                            edge_infos[i].label_x -= half;
+                            edge_infos[j].label_x += half;
+                        }
+                    } else {
+                        const half = @divTrunc(y_overlap + 1, 2);
+                        if (edge_infos[i].label_y >= edge_infos[j].label_y) {
+                            edge_infos[i].label_y += half;
+                            edge_infos[j].label_y -= half;
+                        } else {
+                            edge_infos[i].label_y -= half;
+                            edge_infos[j].label_y += half;
+                        }
+                    }
+                    shifted = true;
+                }
+            }
+        }
+        if (!shifted) break;
     }
 
     // Second pass: write edge JSON with label positions
