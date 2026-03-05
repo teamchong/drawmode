@@ -1,8 +1,11 @@
 /**
  * Cloudflare Worker entry — remote MCP server for drawmode.
  *
+ * Uses the same McpServer + tool registration pattern as the local server (src/index.ts),
+ * with WebStandardStreamableHTTPServerTransport for CF Workers compatibility.
+ *
  * Handles:
- * - POST /mcp — Streamable HTTP MCP transport (stateless)
+ * - POST/GET/DELETE /mcp — MCP Streamable HTTP transport (stateless)
  * - GET /health — Health check
  * - POST /proxy/excalidraw — Proxy for excalidraw.com upload (no CORS on their API)
  *
@@ -10,20 +13,20 @@
  * PNG export uses Cloudflare Browser Rendering (puppeteer) when available.
  */
 
-import type { RenderOpts } from "../src/types.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { z } from "zod";
 import { buildRenderHTML } from "../src/png.js";
 import { SDK_TYPES } from "../src/sdk-types.js";
 import { executeCode } from "../src/executor.js";
 import puppeteer from "@cloudflare/puppeteer";
 
-const corsHeaders = {
-  "Content-Type": "application/json",
-  "Access-Control-Allow-Origin": "*",
-} as const;
-
 interface Env {
   MYBROWSER: Fetcher;
 }
+
+/** Worker has no filesystem — coerce excalidraw format to url */
+const WORKER_FORMAT_MAP = { excalidraw: "url" } as const;
 
 /**
  * Render Excalidraw elements to PNG via Cloudflare Browser Rendering.
@@ -51,8 +54,99 @@ async function renderPng(elements: unknown[], env: Env): Promise<string | null> 
   }
 }
 
-/** Worker has no filesystem — coerce excalidraw format to url */
-const WORKER_FORMAT_MAP = { excalidraw: "url" } as const;
+/** Create an McpServer with draw tools registered. Env is captured for PNG rendering. */
+function createServer(env: Env): McpServer {
+  const server = new McpServer({ name: "drawmode", version: "0.1.0" });
+
+  server.tool(
+    "draw",
+    `Generate or edit an Excalidraw architecture diagram by writing TypeScript code.
+
+You have access to the \`Diagram\` class. Create a new diagram, add shapes, connect them, and return the render result.
+
+TypeScript types available:
+${SDK_TYPES}
+
+Example — new diagram:
+\`\`\`typescript
+const d = new Diagram();
+const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
+const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
+const cache = d.addBox("Redis", { row: 1, col: 2, color: "cache" });
+d.connect(api, db, "queries");
+d.connect(api, cache, "reads", { style: "dashed" });
+d.addGroup("Data Layer", [db, cache]);
+return d.render({ format: "url" });
+\`\`\`
+
+Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omitted.`,
+    {
+      code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
+      format: z.enum(["excalidraw", "url", "png"]).default("excalidraw").describe("Output format"),
+    },
+    async ({ code, format }) => {
+      const wantsPng = format === "png";
+      const { result, error } = await executeCode(code, { format: "url" }, WORKER_FORMAT_MAP);
+
+      if (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error}` }],
+          isError: true,
+        };
+      }
+
+      const elements = Array.isArray((result.json as { elements?: unknown[] }).elements)
+        ? (result.json as { elements: unknown[] }).elements
+        : [];
+      const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+
+      if (wantsPng) {
+        try {
+          const pngBase64 = await renderPng(elements, env);
+          if (pngBase64) {
+            parts.push({ type: "image", data: pngBase64, mimeType: "image/png" });
+          } else {
+            if (result.url) parts.push({ type: "text", text: result.url });
+            parts.push({ type: "text", text: "PNG export unavailable (no browser binding). Fell back to URL." });
+          }
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (result.url) parts.push({ type: "text", text: result.url });
+          parts.push({ type: "text", text: `PNG export failed: ${msg}. Fell back to URL.` });
+        }
+      } else if (result.url) {
+        parts.push({ type: "text", text: result.url });
+      }
+
+      parts.push({ type: "text", text: `Generated ${elements.length} elements` });
+
+      return { content: parts };
+    },
+  );
+
+  server.tool(
+    "draw_info",
+    "Get information about drawmode capabilities, color presets, and SDK reference.",
+    {},
+    async () => ({
+      content: [{
+        type: "text" as const,
+        text: `drawmode — Code Mode MCP for Excalidraw diagrams (Worker mode)\n\nColor presets: frontend, backend, database, storage, ai, external, orchestration, queue, cache, users\n\n${SDK_TYPES}\n\nWASM layout: not available (Worker mode)`,
+      }],
+    }),
+  );
+
+  return server;
+}
+
+/** Add CORS headers to a Response */
+function withCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
+  headers.set("Access-Control-Allow-Headers", "Content-Type, mcp-session-id, mcp-protocol-version");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -62,146 +156,13 @@ export default {
       return Response.json({ status: "ok", service: "drawmode", mode: "worker" });
     }
 
-    // MCP endpoint — stateless JSON-RPC handler
-    if (request.method === "POST" && url.pathname === "/mcp") {
-      try {
-        // Parse the JSON-RPC request from the body
-        const body = await request.json() as { method: string; id?: string | number; params?: Record<string, unknown> };
-
-        // Handle JSON-RPC methods directly for stateless Worker deployment
-        if (body.method === "initialize") {
-          return Response.json({
-            jsonrpc: "2.0",
-            id: body.id,
-            result: {
-              protocolVersion: "2024-11-05",
-              serverInfo: { name: "drawmode", version: "0.1.0" },
-              capabilities: { tools: {} },
-            },
-          }, { headers: corsHeaders });
-        }
-
-        if (body.method === "tools/list") {
-          // Return tool definitions
-          return Response.json({
-            jsonrpc: "2.0",
-            id: body.id,
-            result: {
-              tools: [
-                {
-                  name: "draw",
-                  description: "Generate an Excalidraw architecture diagram by writing TypeScript code.",
-                  inputSchema: {
-                    type: "object",
-                    properties: {
-                      code: { type: "string", description: "TypeScript code using the Diagram class." },
-                      format: { type: "string", enum: ["excalidraw", "url", "png"], default: "excalidraw" },
-                    },
-                    required: ["code"],
-                  },
-                },
-                {
-                  name: "draw_info",
-                  description: "Get information about drawmode capabilities, color presets, and SDK reference.",
-                  inputSchema: { type: "object", properties: {} },
-                },
-              ],
-            },
-          }, { headers: corsHeaders });
-        }
-
-        if (body.method === "tools/call") {
-          const params = body.params as { name: string; arguments?: Record<string, unknown> } | undefined;
-          const toolName = params?.name;
-          const args = params?.arguments ?? {};
-
-          if (toolName === "draw") {
-            const code = args.code as string;
-            const wantsPng = (args.format as string) === "png";
-            // Always build as "url" internally — PNG is a post-processing step
-            const { result, error } = await executeCode(code, { format: "url" }, WORKER_FORMAT_MAP);
-
-            if (error) {
-              return Response.json({
-                jsonrpc: "2.0",
-                id: body.id,
-                result: {
-                  content: [{ type: "text", text: `Error: ${error}` }],
-                  isError: true,
-                },
-              }, { headers: corsHeaders });
-            }
-
-            const elements = Array.isArray((result.json as { elements?: unknown[] }).elements)
-              ? (result.json as { elements: unknown[] }).elements
-              : [];
-            const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
-
-            // PNG export via Cloudflare Browser Rendering
-            if (wantsPng) {
-              try {
-                const pngBase64 = await renderPng(elements, env);
-                if (pngBase64) {
-                  parts.push({ type: "image", data: pngBase64, mimeType: "image/png" });
-                } else {
-                  // Browser binding unavailable — fall back to URL
-                  if (result.url) parts.push({ type: "text", text: result.url });
-                  parts.push({ type: "text", text: "PNG export unavailable (no browser binding). Fell back to URL." });
-                }
-              } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                if (result.url) parts.push({ type: "text", text: result.url });
-                parts.push({ type: "text", text: `PNG export failed: ${msg}. Fell back to URL.` });
-              }
-            } else {
-              if (result.url) {
-                parts.push({ type: "text", text: result.url });
-              }
-            }
-
-            parts.push({ type: "text", text: `Generated ${elements.length} elements` });
-
-            return Response.json({
-              jsonrpc: "2.0",
-              id: body.id,
-              result: { content: parts },
-            }, { headers: corsHeaders });
-          }
-
-          if (toolName === "draw_info") {
-            return Response.json({
-              jsonrpc: "2.0",
-              id: body.id,
-              result: {
-                content: [{
-                  type: "text",
-                  text: `drawmode — Code Mode MCP for Excalidraw diagrams (Worker mode)\n\nColor presets: frontend, backend, database, storage, ai, external, orchestration, queue, cache, users\n\n${SDK_TYPES}\n\nWASM layout: not available (Worker mode)`,
-                }],
-              },
-            }, { headers: corsHeaders });
-          }
-
-          return Response.json({
-            jsonrpc: "2.0",
-            id: body.id,
-            error: { code: -32601, message: `Unknown tool: ${toolName}` },
-          }, { headers: corsHeaders });
-        }
-
-        // JSON-RPC notifications (no id) should be silently accepted
-        if (body.id === undefined || body.id === null) {
-          return new Response(null, { status: 204 });
-        }
-
-        return Response.json({
-          jsonrpc: "2.0",
-          id: body.id,
-          error: { code: -32601, message: `Method not found: ${body.method}` },
-        }, { headers: corsHeaders });
-      } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : String(e);
-        return Response.json({ jsonrpc: "2.0", error: { code: -32603, message } }, { status: 500 });
-      }
+    // MCP endpoint — stateless via WebStandardStreamableHTTPServerTransport
+    if (url.pathname === "/mcp") {
+      const server = createServer(env);
+      const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
+      await server.connect(transport);
+      const response = await transport.handleRequest(request);
+      return withCors(response);
     }
 
     // Proxy excalidraw.com upload (their API has no CORS headers)
@@ -230,8 +191,8 @@ export default {
       return new Response(null, {
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, mcp-session-id, mcp-protocol-version",
         },
       });
     }
