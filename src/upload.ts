@@ -61,15 +61,10 @@ export async function uploadToExcalidraw(jsonString: string): Promise<string> {
   const dataBuffer = new TextEncoder().encode(jsonString);
   const innerConcat = concatBuffers(contentsMetadata, dataBuffer);
 
-  // 3. zlib compress (matching pako.deflate) → encrypt
-  const wasmCompressed = zlibCompress(innerConcat);
-  let compressed: Uint8Array;
-  if (wasmCompressed) {
-    compressed = wasmCompressed;
-  } else {
-    // Fallback to Node.js zlib if WASM not loaded
-    const { deflateSync } = await import("node:zlib");
-    compressed = deflateSync(innerConcat);
+  // 3. zlib compress (Zig WASM fixed-Huffman deflate) → encrypt
+  const compressed = zlibCompress(innerConcat);
+  if (!compressed) {
+    throw new Error("WASM zlib compression failed — WASM module not loaded");
   }
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
   const encryptedBuffer = await crypto.subtle.encrypt(
