@@ -14,6 +14,7 @@ import {
   validateElements, isWasmLoaded,
   layoutGraphWasm,
   type EdgeRoute,
+  type GroupBounds,
 } from "./layout.js";
 
 const DEFAULT_WIDTH = 180;
@@ -68,11 +69,15 @@ export class Diagram {
 
   private addShape(prefix: string, type: GraphNode["type"], label: string, opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): string {
     const id = this.nextId(prefix);
-    const extraLines = label.split("\n").length - 1;
+    const lines = label.split("\n");
+    const extraLines = lines.length - 1;
+    // Auto-size width from longest line (~9px per char + 40px padding)
+    const longestLine = Math.max(...lines.map(l => l.length));
+    const autoWidth = Math.max(DEFAULT_WIDTH, longestLine * 9 + 40);
     this.nodes.set(id, {
       id, label, type,
       row: opts?.row, col: opts?.col,
-      width: opts?.width ?? DEFAULT_WIDTH,
+      width: opts?.width ?? autoWidth,
       height: opts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT),
       color: resolveColor(opts, defaultPreset),
       opts,
@@ -478,7 +483,7 @@ export class Diagram {
   /** Convert the graph to Excalidraw elements with layout. */
   private async buildElements(): Promise<ExcalidrawElement[]> {
     const elements: ExcalidrawElement[] = [];
-    const { positioned, edgeRoutes } = await this.layoutNodes();
+    const { positioned, edgeRoutes, groupBounds } = await this.layoutNodes();
 
     // Pre-compute arrow bindings per shape: arrowId will be assigned later,
     // so we use edge index to track and fill in the ID after arrow creation.
@@ -657,7 +662,6 @@ export class Diagram {
 
       const co = edge.opts;
       const arrowId = arrowIds[ei];
-      const isElbowed = co?.elbowed !== false; // default true
 
       // Check for WASM-computed edge route (with index for multi-edges)
       const baseRouteKey = `${edge.from}->${edge.to}`;
@@ -665,11 +669,16 @@ export class Diagram {
       edgePairCounts.set(baseRouteKey, edgePairIdx + 1);
       const routeKey = edgePairIdx === 0 ? baseRouteKey : `${baseRouteKey}#${edgePairIdx}`;
       const edgeRoute = edgeRoutes?.get(routeKey);
+      const hasEdgeRoute = edgeRoute && edgeRoute.points.length >= 2;
+
+      // When we have Graphviz-computed route points, use elbowed=false so Excalidraw
+      // renders our exact polyline path. Elbowed mode ignores custom points.
+      const isElbowed = hasEdgeRoute ? false : (co?.elbowed !== false);
 
       let arrowX: number, arrowY: number;
       let points: number[][];
 
-      if (edgeRoute && edgeRoute.points.length >= 2) {
+      if (hasEdgeRoute) {
         // Use Graphviz-computed route (orthogonal spline points)
         arrowX = edgeRoute.points[0][0];
         arrowY = edgeRoute.points[0][1];
@@ -684,6 +693,10 @@ export class Diagram {
         arrowY = fy;
         points = [[0, 0], [tx - fx, ty - fy]];
       }
+
+      // Use Graphviz-computed fixedPoints (where arrow meets node edge)
+      const startFixedPoint: [number, number] = edgeRoute?.startFixedPoint ?? [0.5, 0.5];
+      const endFixedPoint: [number, number] = edgeRoute?.endFixedPoint ?? [0.5, 0.5];
 
       let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
       for (const p of points) {
@@ -715,8 +728,8 @@ export class Diagram {
         elbowed: isElbowed,
         opacity: co?.opacity ?? 100,
         angle: 0,
-        startBinding: { elementId: edge.from, focus: 0, gap: 1, fixedPoint: [0.5, 0.5] },
-        endBinding: { elementId: edge.to, focus: 0, gap: 1, fixedPoint: [0.5, 0.5] },
+        startBinding: { elementId: edge.from, focus: 0, gap: 1, fixedPoint: startFixedPoint as [number, number] },
+        endBinding: { elementId: edge.to, focus: 0, gap: 1, fixedPoint: endFixedPoint as [number, number] },
         startArrowhead: co?.startArrowhead ?? null,
         endArrowhead: co?.endArrowhead ?? "arrow",
         groupIds: [],
@@ -734,11 +747,12 @@ export class Diagram {
 
       // Arrow label placement
       if (edge.label && labelTextId) {
+        const labelWidth = edge.label.length * 8 + 16;
         let labelX: number, labelY: number;
 
         if (edgeRoute?.labelPos) {
-          // Use WASM-computed label position
-          labelX = edgeRoute.labelPos.x;
+          // Use Zig-computed label position (center-based, with collision avoidance)
+          labelX = edgeRoute.labelPos.x - labelWidth / 2;
           labelY = edgeRoute.labelPos.y - 12;
         } else if (points.length >= 2) {
           // Fallback: midpoint of longest segment
@@ -819,30 +833,45 @@ export class Diagram {
     }
 
     // Groups: dashed rectangle around children + label
-    for (const [groupId, group] of this.groups) {
-      const childNodes = group.children
-        .map(c => positioned.get(c))
-        .filter((n): n is PositionedNode => n !== undefined);
-      if (childNodes.length === 0) continue;
+    // Use Graphviz cluster bounding boxes when available (guaranteed non-overlapping)
+    const groupBoundsMap = new Map<string, GroupBounds>();
+    if (groupBounds) {
+      for (const gb of groupBounds) groupBoundsMap.set(gb.id, gb);
+    }
 
-      const padding = 30;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const n of childNodes) {
-        if (n.x! < minX) minX = n.x!;
-        if (n.y! < minY) minY = n.y!;
-        if (n.x! + n.width > maxX) maxX = n.x! + n.width;
-        if (n.y! + n.height > maxY) maxY = n.y! + n.height;
+    for (const [groupId, group] of this.groups) {
+      let gx: number, gy: number, gw: number, gh: number;
+
+      const gb = groupBoundsMap.get(groupId);
+      if (gb) {
+        // Use Graphviz-computed cluster bounding box (non-overlapping)
+        gx = gb.x; gy = gb.y; gw = gb.width; gh = gb.height;
+      } else {
+        // Fallback: compute from child node positions
+        const childNodes = group.children
+          .map(c => positioned.get(c))
+          .filter((n): n is PositionedNode => n !== undefined);
+        if (childNodes.length === 0) continue;
+
+        const padding = 30;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const n of childNodes) {
+          if (n.x! < minX) minX = n.x!;
+          if (n.y! < minY) minY = n.y!;
+          if (n.x! + n.width > maxX) maxX = n.x! + n.width;
+          if (n.y! + n.height > maxY) maxY = n.y! + n.height;
+        }
+        gx = minX - padding;
+        gy = minY - padding - 20;
+        gw = (maxX + padding) - gx;
+        gh = (maxY + padding) - gy;
       }
-      minX -= padding;
-      minY -= padding + 20;
-      maxX += padding;
-      maxY += padding;
 
       elements.push({
         id: groupId,
         type: "rectangle",
-        x: minX, y: minY,
-        width: maxX - minX, height: maxY - minY,
+        x: gx, y: gy,
+        width: gw, height: gh,
         backgroundColor: "transparent",
         strokeColor: "#868e96",
         fillStyle: "solid",
@@ -867,8 +896,8 @@ export class Diagram {
       elements.push({
         id: `${groupId}-label`,
         type: "text",
-        x: minX + 10, y: minY + 5,
-        width: 100, height: 20,
+        x: gx + 10, y: gy + 5,
+        width: group.label.length * 8 + 16, height: 20,
         text: group.label,
         fontSize: 14,
         fontFamily: 1,
@@ -963,9 +992,9 @@ export class Diagram {
     return elements;
   }
 
-  /** Assign x,y positions to all nodes. Priority: WASM Sugiyama → TS grid. */
-  private async layoutNodes(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, EdgeRoute> }> {
-    // Try WASM Sugiyama layout (async)
+  /** Assign x,y positions to all nodes. Priority: WASM Graphviz → TS grid. */
+  private async layoutNodes(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] }> {
+    // Try WASM Graphviz layout (async)
     const wasmResult = await this.layoutNodesWasm();
     if (wasmResult) return wasmResult;
 
@@ -973,7 +1002,7 @@ export class Diagram {
     return { positioned: this.layoutNodesGrid() };
   }
 
-  private async layoutNodesWasm(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, EdgeRoute> } | null> {
+  private async layoutNodesWasm(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] } | null> {
     const graphNodes = Array.from(this.nodes.values()).filter(
       n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond",
     );
@@ -992,7 +1021,7 @@ export class Diagram {
     const result = await layoutGraphWasm(wasmNodes, wasmEdges, wasmGroups.length > 0 ? wasmGroups : undefined);
     if (!result) return null;
 
-    return { positioned: this.applyPositions(result.nodes), edgeRoutes: result.edgeRoutes };
+    return { positioned: this.applyPositions(result.nodes), edgeRoutes: result.edgeRoutes, groupBounds: result.groupBounds };
   }
 
   /** Apply layout positions to nodes, with absX/absY overrides and fallback for unpositioned nodes. */

@@ -51,6 +51,14 @@ void gviz_set_node_attr(gviz_graph_t g, gviz_node_t n, const char *name, const c
     agsafeset((Agnode_t*)n, (char*)name, (char*)value, (char*)"");
 }
 
+gviz_graph_t gviz_add_subgraph(gviz_graph_t g, const char *name) {
+    return (gviz_graph_t)agsubg((Agraph_t*)g, (char*)name, 1);
+}
+
+gviz_node_t gviz_subgraph_add_node(gviz_graph_t subg, gviz_node_t n) {
+    return (gviz_node_t)agsubnode((Agraph_t*)subg, (Agnode_t*)n, 1);
+}
+
 gviz_graph_t gviz_parse_dot(const char *dot_string) {
     return (gviz_graph_t)agmemread(dot_string);
 }

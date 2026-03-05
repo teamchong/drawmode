@@ -11,7 +11,7 @@ const util = @import("util.zig");
 /// Output JSON:
 ///   {"nodes":[{"id":"box_1","x":340,"y":100},...],
 ///    "edges":[{"from":"box_1","to":"box_2","points":[[x,y],[x,y],...]},...]}
-pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, out: []u8) !usize {
+pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: []const u8, out: []u8) !usize {
     var nodes: [MAX_NODES]Node = undefined;
     var node_count: usize = 0;
     node_count = parseNodes(nodes_json, &nodes) catch return 0;
@@ -20,14 +20,20 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, out: []u8) !u
     var edge_count: usize = 0;
     edge_count = parseEdges(edges_json, &edges) catch return 0;
 
+    var groups: [MAX_GROUPS]Group = undefined;
+    var group_count: usize = 0;
+    if (groups_json.len > 2) { // not empty "[]"
+        group_count = parseGroups(groups_json, &groups) catch 0;
+    }
+
     // Build graph programmatically via cgraph API (no DOT parser needed)
     const graph = c.gviz_graph_new("G") orelse return 0;
 
     // Set graph attributes
     c.gviz_set_graph_attr(graph, "rankdir", "TB");
     c.gviz_set_graph_attr(graph, "splines", "ortho");
-    c.gviz_set_graph_attr(graph, "nodesep", "0.5");
-    c.gviz_set_graph_attr(graph, "ranksep", "1.0");
+    c.gviz_set_graph_attr(graph, "nodesep", "1.5");
+    c.gviz_set_graph_attr(graph, "ranksep", "1.2");
 
     // Set default node attributes so per-node agsafeset works
     c.gviz_set_default_node_attr(graph, "width", "");
@@ -62,6 +68,42 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, out: []u8) !u
         c.gviz_set_node_attr(graph, node_ptr, "fixedsize", "true");
     }
 
+    // Create cluster subgraphs for groups (Graphviz keeps clusters non-overlapping)
+    var cluster_ptrs: [MAX_GROUPS]?*anyopaque = undefined;
+    for (groups[0..group_count], 0..) |g, gi| {
+        // Graphviz requires cluster names to start with "cluster"
+        var cluster_name: [64]u8 = undefined;
+        const prefix = "cluster_";
+        @memcpy(cluster_name[0..prefix.len], prefix);
+        const idx_len = writeInt(cluster_name[prefix.len..], @intCast(gi));
+        cluster_name[prefix.len + idx_len] = 0;
+
+        const subg = c.gviz_add_subgraph(graph, @ptrCast(&cluster_name)) orelse {
+            cluster_ptrs[gi] = null;
+            continue;
+        };
+        cluster_ptrs[gi] = subg;
+
+        // Set cluster label and margin (margin ensures padding for TS-side group rect)
+        const label_z = nullTerminate(g.label_slice) orelse continue;
+        c.gviz_set_graph_attr(subg, "label", label_z);
+        c.gviz_set_graph_attr(subg, "style", "dashed");
+        c.gviz_set_graph_attr(subg, "margin", "20");
+
+        // Add child nodes to the cluster subgraph
+        for (g.children_slices[0..g.child_count]) |child_id| {
+            // Find the node pointer for this child
+            for (nodes[0..node_count], 0..) |n, ni| {
+                if (std.mem.eql(u8, n.id_slice, child_id)) {
+                    if (node_ptrs[ni]) |np| {
+                        _ = c.gviz_subgraph_add_node(subg, np);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     // Create edges
     for (edges[0..edge_count], 0..) |e, ei| {
         // Find source and target node pointers
@@ -93,8 +135,8 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, out: []u8) !u
         return 0;
     }
 
-    // Extract positions and write JSON output
-    const result = writeGraphvizOutput(out, graph, gvc, &nodes, node_count, &edges, edge_count);
+    // Extract positions and write JSON output (including cluster bounding boxes)
+    const result = writeGraphvizOutput(out, graph, gvc, &nodes, node_count, &edges, edge_count, &groups, group_count, &cluster_ptrs);
 
     // Cleanup
     c.gviz_free_layout(gvc, graph);
@@ -142,6 +184,10 @@ pub const c = if (is_wasm) struct {
     pub extern fn gviz_set_graph_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
     pub extern fn gviz_set_node_attr(g: ?*anyopaque, n: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
 
+    // Cluster subgraphs
+    pub extern fn gviz_add_subgraph(g: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
+    pub extern fn gviz_subgraph_add_node(subg: ?*anyopaque, n: ?*anyopaque) ?*anyopaque;
+
     // Context and layout
     pub extern fn gviz_context_new() ?*anyopaque;
     pub extern fn gviz_context_free(ctx: ?*anyopaque) void;
@@ -169,6 +215,8 @@ pub const c = if (is_wasm) struct {
     pub fn gviz_set_default_node_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_set_graph_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_set_node_attr(_: ?*anyopaque, _: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
+    pub fn gviz_add_subgraph(_: ?*anyopaque, _: [*:0]const u8) ?*anyopaque { return null; }
+    pub fn gviz_subgraph_add_node(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
     pub fn gviz_context_new() ?*anyopaque { return null; }
     pub fn gviz_context_free(_: ?*anyopaque) void {}
     pub fn gviz_graph_close(_: ?*anyopaque) void {}
@@ -190,6 +238,8 @@ pub const c = if (is_wasm) struct {
 
 const MAX_NODES = 256;
 const MAX_EDGES = 512;
+const MAX_GROUPS = 32;
+const MAX_GROUP_CHILDREN = 64;
 
 const Node = struct {
     id_slice: []const u8,
@@ -202,11 +252,19 @@ const Node = struct {
 const Edge = struct {
     from_slice: []const u8,
     to_slice: []const u8,
+    label_slice: []const u8,
+};
+
+const Group = struct {
+    id_slice: []const u8,
+    label_slice: []const u8,
+    children_slices: [MAX_GROUP_CHILDREN][]const u8,
+    child_count: usize,
 };
 
 // ── Output: Extract Graphviz Layout Results ──
 
-fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX_NODES]Node, node_count: usize, edges: *[MAX_EDGES]Edge, edge_count: usize) usize {
+fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX_NODES]Node, node_count: usize, edges: *[MAX_EDGES]Edge, edge_count: usize, groups: *[MAX_GROUPS]Group, group_count: usize, cluster_ptrs: *[MAX_GROUPS]?*anyopaque) usize {
     var w: usize = 0;
 
     // Get bounding box for Y-flip (Graphviz Y-up → Excalidraw Y-down)
@@ -262,11 +320,90 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
 
     w += copySlice(out[w..], "],\"edges\":[");
 
-    // Extract edge spline points
-    var first_edge = true;
-    for (edges[0..edge_count]) |e| {
-        const spline = findEdgeSpline(graph, e.from_slice, e.to_slice, y_max);
+    // First pass: extract all edge splines and compute label positions
+    const EdgeInfo = struct {
+        spline: SplineResult,
+        edge_idx: usize,
+        label_x: i32,
+        label_y: i32,
+        label_w: i32,
+        label_h: i32,
+        has_label: bool,
+    };
+    var edge_infos: [MAX_EDGES]EdgeInfo = undefined;
+    var edge_info_count: usize = 0;
+
+    for (edges[0..edge_count], 0..) |e, ei| {
+        const spline = findEdgeSpline(graph, e.from_slice, e.to_slice, y_max, nodes, node_count);
         if (spline.point_count < 2) continue;
+
+        var info = EdgeInfo{
+            .spline = spline,
+            .edge_idx = ei,
+            .label_x = 0,
+            .label_y = 0,
+            .label_w = 0,
+            .label_h = 24,
+            .has_label = e.label_slice.len > 0,
+        };
+
+        // Compute label position at midpoint of longest segment
+        if (info.has_label) {
+            var best_len: i32 = 0;
+            var best_seg: usize = 0;
+            var s: usize = 0;
+            while (s + 1 < spline.point_count) : (s += 1) {
+                const dx = absInt(spline.points_x[s + 1] - spline.points_x[s]);
+                const dy = absInt(spline.points_y[s + 1] - spline.points_y[s]);
+                const seg_len = dx + dy;
+                if (seg_len > best_len) { best_len = seg_len; best_seg = s; }
+            }
+            info.label_x = @divTrunc(spline.points_x[best_seg] + spline.points_x[best_seg + 1], 2);
+            info.label_y = @divTrunc(spline.points_y[best_seg] + spline.points_y[best_seg + 1], 2);
+            // Estimate label width: ~8px per char + 16px padding
+            info.label_w = @as(i32, @intCast(e.label_slice.len)) * 8 + 16;
+        }
+
+        edge_infos[edge_info_count] = info;
+        edge_info_count += 1;
+    }
+
+    // Label collision detection: shift overlapping labels apart.
+    // Uses center-based positions with a minimum gap between labels.
+    const MIN_LABEL_GAP = 24; // minimum pixels between adjacent labels
+    var pass: usize = 0;
+    while (pass < 5) : (pass += 1) {
+        var shifted = false;
+        for (0..edge_info_count) |i| {
+            if (!edge_infos[i].has_label) continue;
+            for (0..i) |j| {
+                if (!edge_infos[j].has_label) continue;
+                // Check if labels are too close (overlap or within MIN_LABEL_GAP)
+                const half_gap = @divTrunc(MIN_LABEL_GAP, 2);
+                const ix1 = edge_infos[i].label_x - @divTrunc(edge_infos[i].label_w, 2) - half_gap;
+                const ix2 = edge_infos[i].label_x + @divTrunc(edge_infos[i].label_w, 2) + half_gap;
+                const iy1 = edge_infos[i].label_y - @divTrunc(edge_infos[i].label_h, 2) - half_gap;
+                const iy2 = edge_infos[i].label_y + @divTrunc(edge_infos[i].label_h, 2) + half_gap;
+                const jx1 = edge_infos[j].label_x - @divTrunc(edge_infos[j].label_w, 2) - half_gap;
+                const jx2 = edge_infos[j].label_x + @divTrunc(edge_infos[j].label_w, 2) + half_gap;
+                const jy1 = edge_infos[j].label_y - @divTrunc(edge_infos[j].label_h, 2) - half_gap;
+                const jy2 = edge_infos[j].label_y + @divTrunc(edge_infos[j].label_h, 2) + half_gap;
+
+                if (ix1 < jx2 and ix2 > jx1 and iy1 < jy2 and iy2 > jy1) {
+                    // Too close — shift label i down below label j (with gap)
+                    edge_infos[i].label_y = edge_infos[j].label_y + @divTrunc(edge_infos[j].label_h, 2) + @divTrunc(edge_infos[i].label_h, 2) + MIN_LABEL_GAP;
+                    shifted = true;
+                }
+            }
+        }
+        if (!shifted) break;
+    }
+
+    // Second pass: write edge JSON with label positions
+    var first_edge = true;
+    for (edge_infos[0..edge_info_count]) |info| {
+        const e = edges[info.edge_idx];
+        const spline = info.spline;
 
         if (!first_edge) w += copySlice(out[w..], ",");
         first_edge = false;
@@ -286,10 +423,62 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
             w += copySlice(out[w..], "]");
         }
 
-        w += copySlice(out[w..], "]}");
+        w += copySlice(out[w..], "],\"startFixedPoint\":[");
+        w += writeFloat(out[w..], spline.start_fixed_point[0]);
+        w += copySlice(out[w..], ",");
+        w += writeFloat(out[w..], spline.start_fixed_point[1]);
+        w += copySlice(out[w..], "],\"endFixedPoint\":[");
+        w += writeFloat(out[w..], spline.end_fixed_point[0]);
+        w += copySlice(out[w..], ",");
+        w += writeFloat(out[w..], spline.end_fixed_point[1]);
+        w += copySlice(out[w..], "]");
+
+        // Include label position if edge has a label
+        if (info.has_label) {
+            w += copySlice(out[w..], ",\"labelX\":");
+            w += writeInt(out[w..], info.label_x);
+            w += copySlice(out[w..], ",\"labelY\":");
+            w += writeInt(out[w..], info.label_y);
+        }
+
+        w += copySlice(out[w..], "}");
     }
 
-    w += copySlice(out[w..], "]}");
+    w += copySlice(out[w..], "]");
+
+    // Output cluster (group) bounding boxes from Graphviz
+    if (group_count > 0) {
+        w += copySlice(out[w..], ",\"groups\":[");
+        var first_group = true;
+        for (0..group_count) |gi| {
+            const cluster = cluster_ptrs[gi] orelse continue;
+            const cbb = c.gviz_graph_bbox(cluster);
+
+            if (!first_group) w += copySlice(out[w..], ",");
+            first_group = false;
+
+            // Convert Graphviz bbox (Y-up, points) → Excalidraw (Y-down, pixels)
+            const gx = @as(i32, @intFromFloat(cbb.ll_x));
+            const gy = @as(i32, @intFromFloat(y_max - cbb.ur_y));
+            const gw = @as(i32, @intFromFloat(cbb.ur_x - cbb.ll_x));
+            const gh = @as(i32, @intFromFloat(cbb.ur_y - cbb.ll_y));
+
+            w += copySlice(out[w..], "{\"id\":\"");
+            w += copySlice(out[w..], groups[gi].id_slice);
+            w += copySlice(out[w..], "\",\"x\":");
+            w += writeInt(out[w..], gx);
+            w += copySlice(out[w..], ",\"y\":");
+            w += writeInt(out[w..], gy);
+            w += copySlice(out[w..], ",\"width\":");
+            w += writeInt(out[w..], gw);
+            w += copySlice(out[w..], ",\"height\":");
+            w += writeInt(out[w..], gh);
+            w += copySlice(out[w..], "}");
+        }
+        w += copySlice(out[w..], "]");
+    }
+
+    w += copySlice(out[w..], "}");
     return w;
 }
 
@@ -299,13 +488,17 @@ const SplineResult = struct {
     points_x: [MAX_SPLINE_POINTS]i32,
     points_y: [MAX_SPLINE_POINTS]i32,
     point_count: usize,
+    start_fixed_point: [2]f64,
+    end_fixed_point: [2]f64,
 };
 
-fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8, y_max: f64) SplineResult {
+fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8, y_max: f64, nodes: *[MAX_NODES]Node, node_count: usize) SplineResult {
     var result = SplineResult{
         .points_x = undefined,
         .points_y = undefined,
         .point_count = 0,
+        .start_fixed_point = .{ 0.5, 0.5 },
+        .end_fixed_point = .{ 0.5, 0.5 },
     };
 
     // Find source node
@@ -331,16 +524,11 @@ fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8,
                 // Found the edge — extract spline data
                 var spline: GvizSpline = undefined;
                 if (c.gviz_edge_spline(e, &spline) != 0) {
-                    // Add start point if present
-                    if (spline.has_start_point != 0 and result.point_count < MAX_SPLINE_POINTS) {
-                        result.points_x[result.point_count] = @intFromFloat(spline.start_point.x);
-                        result.points_y[result.point_count] = @intFromFloat(y_max - spline.start_point.y);
-                        result.point_count += 1;
-                    }
-
                     // Extract knot points from cubic bezier sequence.
                     // For ortho splines, control points coincide with knots,
                     // so every 3rd point gives the path waypoints.
+                    // Don't add sp/ep as separate points — they create tiny duplicate
+                    // segments near nodes. Use them only for fixedPoint calculation.
                     var i: usize = 0;
                     while (i < spline.point_count and result.point_count < MAX_SPLINE_POINTS) {
                         const pt = spline.points[i];
@@ -349,12 +537,53 @@ fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8,
                         result.point_count += 1;
                         i += 3;
                     }
+                    // Also capture the last bezier knot if not already included
+                    if (spline.point_count > 0 and (spline.point_count - 1) % 3 != 0) {
+                        const last_pt = spline.points[spline.point_count - 1];
+                        if (result.point_count < MAX_SPLINE_POINTS) {
+                            result.points_x[result.point_count] = @intFromFloat(last_pt.x);
+                            result.points_y[result.point_count] = @intFromFloat(y_max - last_pt.y);
+                            result.point_count += 1;
+                        }
+                    }
 
-                    // Add end point if present
-                    if (spline.has_end_point != 0 and result.point_count < MAX_SPLINE_POINTS) {
-                        result.points_x[result.point_count] = @intFromFloat(spline.end_point.x);
-                        result.points_y[result.point_count] = @intFromFloat(y_max - spline.end_point.y);
-                        result.point_count += 1;
+                    // Compute fixedPoints using sp/ep (arrow tip positions on node boundary)
+                    if (result.point_count >= 2) {
+                        // Use sp (start point) if available, else first bezier knot
+                        const fix_start_x: f64 = if (spline.has_start_point != 0) spline.start_point.x else @floatFromInt(result.points_x[0]);
+                        const fix_start_y: f64 = if (spline.has_start_point != 0) (y_max - spline.start_point.y) else @floatFromInt(result.points_y[0]);
+                        const fix_end_x: f64 = if (spline.has_end_point != 0) spline.end_point.x else @floatFromInt(result.points_x[result.point_count - 1]);
+                        const fix_end_y: f64 = if (spline.has_end_point != 0) (y_max - spline.end_point.y) else @floatFromInt(result.points_y[result.point_count - 1]);
+
+                        // Find source node dimensions
+                        for (nodes[0..node_count]) |sn| {
+                            if (std.mem.eql(u8, sn.id_slice, from_name)) {
+                                var scx: f64 = 0;
+                                var scy: f64 = 0;
+                                c.gviz_node_coord(src, &scx, &scy);
+                                const snx = scx - @as(f64, @floatFromInt(sn.width)) / 2.0;
+                                const sny = (y_max - scy) - @as(f64, @floatFromInt(sn.height)) / 2.0;
+                                result.start_fixed_point[0] = clamp01((fix_start_x - snx) / @as(f64, @floatFromInt(sn.width)));
+                                result.start_fixed_point[1] = clamp01((fix_start_y - sny) / @as(f64, @floatFromInt(sn.height)));
+                                break;
+                            }
+                        }
+                        // Find target node dimensions
+                        const head_for_fp = c.gviz_edge_head(e);
+                        if (head_for_fp != null) {
+                            for (nodes[0..node_count]) |tn| {
+                                if (std.mem.eql(u8, tn.id_slice, to_name)) {
+                                    var tcx: f64 = 0;
+                                    var tcy: f64 = 0;
+                                    c.gviz_node_coord(head_for_fp, &tcx, &tcy);
+                                    const tnx = tcx - @as(f64, @floatFromInt(tn.width)) / 2.0;
+                                    const tny = (y_max - tcy) - @as(f64, @floatFromInt(tn.height)) / 2.0;
+                                    result.end_fixed_point[0] = clamp01((fix_end_x - tnx) / @as(f64, @floatFromInt(tn.width)));
+                                    result.end_fixed_point[1] = clamp01((fix_end_y - tny) / @as(f64, @floatFromInt(tn.height)));
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
                 return result;
@@ -364,6 +593,16 @@ fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8,
     }
 
     return result;
+}
+
+fn absInt(v: i32) i32 {
+    return if (v < 0) -v else v;
+}
+
+fn clamp01(v: f64) f64 {
+    if (v < 0.0) return 0.0;
+    if (v > 1.0) return 1.0;
+    return v;
 }
 
 // ── Null-termination helper ──
@@ -439,12 +678,61 @@ fn parseEdges(json: []const u8, out_edges: *[MAX_EDGES]Edge) !usize {
     while (pos < json.len and json[pos] != '{') : (pos += 1) {}
     while (pos < json.len and count < MAX_EDGES) {
         if (json[pos] == '{') {
-            var edge = Edge{ .from_slice = &.{}, .to_slice = &.{} };
+            var edge = Edge{ .from_slice = &.{}, .to_slice = &.{}, .label_slice = &.{} };
             const obj_end = findMatchingBrace(json[pos..]) + pos;
             const obj = json[pos..obj_end];
             edge.from_slice = extractStringField(obj, "from") orelse &.{};
             edge.to_slice = extractStringField(obj, "to") orelse &.{};
+            edge.label_slice = extractStringField(obj, "label") orelse &.{};
             out_edges[count] = edge;
+            count += 1;
+            pos = obj_end;
+        }
+        pos += 1;
+    }
+    return count;
+}
+
+/// Parse groups JSON: [{"id":"g1","label":"Group","children":["n1","n2"]}, ...]
+fn parseGroups(json: []const u8, out_groups: *[MAX_GROUPS]Group) !usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos < json.len and json[pos] != '{') : (pos += 1) {}
+    while (pos < json.len and count < MAX_GROUPS) {
+        if (json[pos] == '{') {
+            const obj_end = findMatchingBrace(json[pos..]) + pos;
+            const obj = json[pos..obj_end];
+
+            var group = Group{
+                .id_slice = extractStringField(obj, "id") orelse &.{},
+                .label_slice = extractStringField(obj, "label") orelse &.{},
+                .children_slices = undefined,
+                .child_count = 0,
+            };
+
+            // Parse children array: find "children":[ then extract strings
+            if (std.mem.indexOf(u8, obj, "\"children\"")) |ci| {
+                var cp = ci + "\"children\"".len;
+                // Skip to '['
+                while (cp < obj.len and obj[cp] != '[') : (cp += 1) {}
+                if (cp < obj.len) {
+                    cp += 1; // skip '['
+                    while (cp < obj.len and obj[cp] != ']' and group.child_count < MAX_GROUP_CHILDREN) {
+                        if (obj[cp] == '"') {
+                            cp += 1; // skip opening quote
+                            const str_start = cp;
+                            while (cp < obj.len and obj[cp] != '"') : (cp += 1) {}
+                            group.children_slices[group.child_count] = obj[str_start..cp];
+                            group.child_count += 1;
+                            if (cp < obj.len) cp += 1; // skip closing quote
+                        } else {
+                            cp += 1;
+                        }
+                    }
+                }
+            }
+
+            out_groups[count] = group;
             count += 1;
             pos = obj_end;
         }

@@ -47,6 +47,10 @@ void gviz_set_default_node_attr(gviz_graph_t g, const char *name, const char *va
 void gviz_set_graph_attr(gviz_graph_t g, const char *name, const char *value);
 void gviz_set_node_attr(gviz_graph_t g, gviz_node_t n, const char *name, const char *value);
 
+/* Subgraph (cluster) construction */
+gviz_graph_t gviz_add_subgraph(gviz_graph_t g, const char *name);
+gviz_node_t gviz_subgraph_add_node(gviz_graph_t subg, gviz_node_t n);
+
 /* Graph operations */
 gviz_graph_t gviz_parse_dot(const char *dot_string);
 void gviz_graph_close(gviz_graph_t g);
