@@ -4,6 +4,7 @@ zig-out/
 zig-cache/
 .zig-cache/
 *.wasm
+*.o
 !wasm/src/
 .DS_Store
 
