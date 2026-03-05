@@ -7,7 +7,7 @@ Code Mode MCP server for generating Excalidraw architecture diagrams. Instead of
 - **Code Mode** — LLM writes TypeScript, not raw JSON. One tool, typed SDK, zero prompt engineering
 - **Automatic layout** — Graphviz `dot` engine (Sugiyama algorithm) with crossing minimization and orthogonal edge routing
 - **10 semantic color presets** + 18 cloud provider presets (AWS, Azure, GCP, K8s)
-- **2 output formats** — `.excalidraw` file, shareable excalidraw.com URL
+- **4 output formats** — `.excalidraw` file, excalidraw.com URL, PNG, SVG
 - **Interactive HTML widget** — live Excalidraw preview in Claude Desktop and Cowork via MCP structured content
 - **Edit existing diagrams** — `Diagram.fromFile()` loads `.excalidraw` files for modification
 - **Groups and frames** — visual containment with dashed boundaries or Excalidraw frames
@@ -56,7 +56,7 @@ drawmode:     LLM → 10 lines of TypeScript → SDK + Graphviz → valid diagra
 3. Local executor runs it — SDK handles labels, colors, IDs
 4. Graphviz `dot` engine handles layout positioning and edge routing (with orthogonal splines)
 5. Zig WASM handles validation
-6. Output: `.excalidraw` file + excalidraw.com URL
+6. Output: `.excalidraw` file, excalidraw.com URL, PNG, or SVG
 
 ```typescript
 const d = new Diagram();
@@ -74,16 +74,18 @@ return d.render({ format: "url" });
 ### Creating Elements
 
 ```typescript
-// Rectangles and ellipses
-d.addBox(label, opts?)    // → element ID
+// Rectangles, ellipses, and diamonds
+d.addBox(label, opts?)      // → element ID
 d.addEllipse(label, opts?)
+d.addDiamond(label, opts?)
 
 // Standalone text and lines
 d.addText(text, opts?)
 d.addLine(points, opts?)
 
-// Groups
+// Groups and frames
 d.addGroup(label, children[])
+d.addFrame(name, children[])
 
 // Connections
 d.connect(from, to, label?, opts?)
@@ -101,7 +103,7 @@ interface ShapeOpts {
   width?: number; height?: number;
   strokeColor?: string;                 // hex override
   backgroundColor?: string;            // hex override
-  fillStyle?: "solid" | "hachure" | "cross-hatch";
+  fillStyle?: "solid" | "hachure" | "cross-hatch" | "zigzag";
   strokeWidth?: number;                 // default 2
   strokeStyle?: "solid" | "dashed" | "dotted";
   roughness?: number;                   // 0=architect, 1=artist, 2=cartoonist
@@ -111,6 +113,8 @@ interface ShapeOpts {
   fontFamily?: 1 | 2 | 3;              // Virgil / Helvetica / Cascadia
   textAlign?: "left" | "center" | "right";
   verticalAlign?: "top" | "middle";
+  link?: string | null;                   // hyperlink URL
+  customData?: Record<string, unknown> | null; // arbitrary metadata
 }
 ```
 
@@ -123,10 +127,11 @@ interface ConnectOpts {
   strokeWidth?: number;
   roughness?: number;
   opacity?: number;
-  startArrowhead?: null | "arrow" | "bar" | "dot" | "triangle";
-  endArrowhead?: null | "arrow" | "bar" | "dot" | "triangle";  // default "arrow"
+  startArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";
+  endArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";  // default "arrow"
   elbowed?: boolean;          // default true
   labelFontSize?: number;
+  customData?: Record<string, unknown> | null; // arbitrary metadata
 }
 ```
 
@@ -134,9 +139,22 @@ interface ConnectOpts {
 
 ```typescript
 const d = await Diagram.fromFile("diagram.excalidraw");
+
+// Find and inspect
 const ids = d.findByLabel("API");       // substring search
+const allNodes = d.getNodes();          // all node IDs
+const edges = d.getEdges();            // [{ from, to, label }]
+
+// Update
 d.updateNode(ids[0], { label: "New API", color: "ai" });
+d.updateEdge(from, to, { label: "writes", style: "dashed" });
+
+// Remove
 d.removeNode(d.findByLabel("Old")[0]);  // removes node + connected edges
+d.removeEdge(from, to, "queries");      // remove specific edge
+d.removeGroup(groupId);                 // remove group, keep children
+d.removeFrame(frameId);                 // remove frame, keep children
+
 return d.render({ path: "diagram.excalidraw" });
 ```
 
@@ -173,7 +191,8 @@ return d.render({ path: "diagram.excalidraw" });
 |--------|-------------|----------|
 | `excalidraw` | `.excalidraw` JSON file | Claude Code, Cursor, VS Code |
 | `url` | Shareable excalidraw.com link | All clients |
-| `png` | Pixel-perfect PNG image (via Cloudflare Browser Rendering) | Cloudflare Worker only |
+| `png` | PNG image (via puppeteer) | Local with puppeteer, Cloudflare Worker |
+| `svg` | SVG markup | Local with puppeteer |
 
 ## Architecture
 
@@ -187,14 +206,16 @@ drawmode/
 │   ├── executor.ts          # Local executor
 │   ├── layout.ts            # Layout bridge (Graphviz primary, Zig WASM fallback)
 │   ├── upload.ts            # Excalidraw.com upload
+│   ├── png.ts               # Image export (PNG/SVG via puppeteer)
 │   ├── types.ts             # Shared types
 │   └── widget.html          # MCP Apps HTML widget
 ├── wasm/                    # Zig WASM module
 │   └── src/
 │       ├── main.zig         # WASM exports
 │       ├── layout.zig       # Grid layout fallback
-│       ├── arrows.zig       # Arrow routing fallback
-│       └── validate.zig     # Structural validation
+│       ├── arrows.zig       # Arrow routing
+│       ├── validate.zig     # Structural validation
+│       └── util.zig         # Shared utilities
 └── worker/                  # Cloudflare Worker (remote MCP)
     ├── index.ts
     └── wrangler.toml
@@ -221,7 +242,7 @@ Falls back to Zig WASM grid → TS grid if Graphviz is unavailable.
 pnpm install              # Install dependencies
 pnpm build                # Build TS + WASM
 pnpm dev                  # Dev server (HTTP mode)
-pnpm test                 # Run tests (64 tests)
+pnpm test                 # Run tests (70 tests)
 
 cd wasm && zig build       # Build WASM module only
 cd wasm && zig build test  # Run Zig tests
