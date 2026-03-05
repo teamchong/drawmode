@@ -215,6 +215,19 @@ export class Diagram {
       }
     }
 
+    // Index all elements by ID for cross-referencing (e.g. arrow _labelId → text element)
+    const elemById = new Map<string, ExcalidrawElement>();
+    for (const el of elements) elemById.set(el.id, el);
+
+    // Collect arrow label text IDs so they can be skipped when processing standalone text
+    const arrowLabelIds = new Set<string>();
+    for (const el of elements) {
+      if (el.type === "arrow") {
+        const labelId = (el.customData as Record<string, unknown> | undefined)?._labelId as string | undefined;
+        if (labelId) arrowLabelIds.add(labelId);
+      }
+    }
+
     // Pre-detect group IDs so label text nodes can be skipped regardless of element order
     const groupIds = new Set<string>();
     for (const el of elements) {
@@ -282,7 +295,8 @@ export class Diagram {
         const endId = (el.customData as Record<string, unknown> | undefined)?._to as string | undefined
           ?? el.endBinding?.elementId;
         if (startId && endId) {
-          const arrowLabel = textByContainer.get(el.id);
+          const labelId = (el.customData as Record<string, unknown> | undefined)?._labelId as string | undefined;
+          const arrowLabel = labelId ? elemById.get(labelId) : textByContainer.get(el.id);
           d.edges.push({
             from: startId,
             to: endId,
@@ -306,6 +320,8 @@ export class Diagram {
       } else if (el.type === "text" && !el.containerId) {
         // Skip group label text elements (detected in pre-scan above)
         if (el.id.endsWith("-label") && groupIds.has(el.id.replace(/-label$/, ""))) continue;
+        // Skip arrow label text elements (identified via arrow customData._labelId)
+        if (arrowLabelIds.has(el.id)) continue;
 
         // Standalone text — add as text node
         d.nodes.set(el.id, {
@@ -770,14 +786,14 @@ export class Diagram {
         groupIds: [],
         frameId: null,
         isDeleted: false,
-        boundElements: labelTextId ? [{ type: "text", id: labelTextId }] : null,
+        boundElements: null,
         updated: Date.now(),
         locked: false,
         link: null,
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
-        customData: { ...(co?.customData ?? {}), _from: edge.from, _to: edge.to },
+        customData: { ...(co?.customData ?? {}), _from: edge.from, _to: edge.to, ...(labelTextId ? { _labelId: labelTextId } : {}) },
       });
 
       // Arrow label placement
@@ -820,7 +836,7 @@ export class Diagram {
           lineHeight: getLineHeight(labelFf),
           textAlign: "center",
           verticalAlign: "middle",
-          containerId: arrowId,
+          containerId: null,
           originalText: edge.label,
           autoResize: true,
           strokeColor: "#1e1e1e",

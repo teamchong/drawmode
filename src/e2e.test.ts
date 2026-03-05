@@ -254,15 +254,17 @@ describe("e2e: MCP draw tool", () => {
       expect(elements.find(e => e.id === cd._to)).toBeDefined();
     }
 
-    // Verify arrow labels
+    // Verify arrow labels are free-standing text (containerId: null)
+    // with _labelId in arrow's customData for fromFile round-trip
     for (const arrow of arrows) {
-      const bound = arrow.boundElements as Array<{ type: string; id: string }> | null;
-      expect(bound).toBeTruthy();
-      expect(bound!.length).toBe(1);
-      const labelEl = elements.find(e => e.id === bound![0].id);
-      expect(labelEl).toBeDefined();
-      expect(labelEl!.type).toBe("text");
-      expect(labelEl!.containerId).toBe(arrow.id);
+      const cd = arrow.customData as Record<string, unknown> | undefined;
+      const labelId = cd?._labelId as string | undefined;
+      if (labelId) {
+        const labelEl = elements.find(e => e.id === labelId);
+        expect(labelEl).toBeDefined();
+        expect(labelEl!.type).toBe("text");
+        expect(labelEl!.containerId).toBeNull();
+      }
     }
 
     // Verify dashed arrow

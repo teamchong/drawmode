@@ -73,18 +73,14 @@ describe("Diagram SDK", () => {
 
     const arrow = elements.find(e => e.type === "arrow")!;
     expect(arrow).toBeDefined();
-    expect(arrow.boundElements).toBeTruthy();
-    expect(arrow.boundElements!.length).toBe(1);
-    expect(arrow.boundElements![0].type).toBe("text");
 
-    const labelId = arrow.boundElements![0].id;
-    // The arrow label has containerId set to the arrow's ID, not the label text ID
+    // Arrow labels are free-standing text (no containerId) so Excalidraw
+    // respects the Zig-computed label position instead of auto-centering.
     const label = elements.find(e =>
-      e.type === "text" && e.containerId === arrow.id,
+      e.type === "text" && e.text === "writes to",
     );
     expect(label).toBeDefined();
-    expect(label!.text).toBe("writes to");
-    expect(label!.id).toBe(labelId);
+    expect(label!.containerId).toBeNull();
   });
 
   it("addGroup creates dashed rectangle + label text", async () => {
@@ -261,7 +257,7 @@ describe("Diagram SDK", () => {
     const result = await d.render({ format: "excalidraw" });
     const elements = result.json.elements;
     const arrow = elements.find(e => e.type === "arrow")!;
-    const label = elements.find(e => e.type === "text" && e.containerId === arrow.id)!;
+    const label = elements.find(e => e.type === "text" && e.text === "big label")!;
 
     expect(label.fontSize).toBe(20);
   });
