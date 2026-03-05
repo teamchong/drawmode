@@ -276,8 +276,11 @@ export class Diagram {
         };
         d.nodes.set(el.id, node);
       } else if (el.type === "arrow") {
-        const startId = el.startBinding?.elementId;
-        const endId = el.endBinding?.elementId;
+        // Recover edge endpoints from customData (preferred) or legacy bindings
+        const startId = (el.customData as Record<string, unknown> | undefined)?._from as string | undefined
+          ?? el.startBinding?.elementId;
+        const endId = (el.customData as Record<string, unknown> | undefined)?._to as string | undefined
+          ?? el.endBinding?.elementId;
         if (startId && endId) {
           const arrowLabel = textByContainer.get(el.id);
           d.edges.push({
@@ -529,18 +532,10 @@ export class Diagram {
     const elements: ExcalidrawElement[] = [];
     const { positioned, edgeRoutes, groupBounds } = await this.layoutNodes();
 
-    // Pre-compute arrow bindings per shape: arrowId will be assigned later,
-    // so we use edge index to track and fill in the ID after arrow creation.
-    const arrowBindingsPerNode = new Map<string, { type: "arrow"; id: string }[]>();
+    // Pre-compute arrow IDs (one per edge, in order)
     const arrowIds: string[] = [];
     for (let i = 0; i < this.edges.length; i++) {
-      const edge = this.edges[i];
-      const arrowId = this.nextId("arr");
-      arrowIds.push(arrowId);
-      for (const nodeId of [edge.from, edge.to]) {
-        if (!arrowBindingsPerNode.has(nodeId)) arrowBindingsPerNode.set(nodeId, []);
-        arrowBindingsPerNode.get(nodeId)!.push({ type: "arrow", id: arrowId });
-      }
+      arrowIds.push(this.nextId("arr"));
     }
 
     // Create shape + bound text for each node
@@ -641,7 +636,6 @@ export class Diagram {
         roundness: o?.roundness !== undefined ? o.roundness : { type: 3 },
         boundElements: [
           { type: "text", id: textId },
-          ...(arrowBindingsPerNode.get(node.id) ?? []),
         ],
         groupIds: [],
         frameId: null,
@@ -715,9 +709,9 @@ export class Diagram {
       const edgeRoute = edgeRoutes?.get(routeKey);
       const hasEdgeRoute = edgeRoute && edgeRoute.points.length >= 2;
 
-      // When we have Graphviz-computed route points, use elbowed=false so Excalidraw
-      // renders our exact polyline path. Elbowed mode ignores custom points.
-      const isElbowed = hasEdgeRoute ? false : (co?.elbowed !== false);
+      // Always elbowed=false — arrows are static polylines (no bindings).
+      // Excalidraw renders our exact points without recalculating on interaction.
+      const isElbowed = false;
 
       let arrowX: number, arrowY: number;
       let points: number[][];
@@ -728,19 +722,22 @@ export class Diagram {
         arrowY = edgeRoute.points[0][1];
         points = edgeRoute.points.map(([px, py]) => [px - arrowX, py - arrowY]);
       } else {
-        // Fallback: straight line from source center to target center
+        // Fallback: orthogonal route from source edge to target edge
         const fx = (fromNode.x ?? 0) + fromNode.width / 2;
-        const fy = (fromNode.y ?? 0) + fromNode.height / 2;
+        const fy = (fromNode.y ?? 0) + fromNode.height;  // bottom edge of source
         const tx = (toNode.x ?? 0) + toNode.width / 2;
-        const ty = (toNode.y ?? 0) + toNode.height / 2;
+        const ty = (toNode.y ?? 0);                       // top edge of target
         arrowX = fx;
         arrowY = fy;
-        points = [[0, 0], [tx - fx, ty - fy]];
+        if (Math.abs(fx - tx) < 1) {
+          // Vertically aligned — straight line
+          points = [[0, 0], [0, ty - fy]];
+        } else {
+          // L-shaped orthogonal route: down to midpoint, across, then down
+          const midY = Math.round((fy + ty) / 2);
+          points = [[0, 0], [0, midY - fy], [tx - fx, midY - fy], [tx - fx, ty - fy]];
+        }
       }
-
-      // Use Graphviz-computed fixedPoints (where arrow meets node edge)
-      const startFixedPoint: [number, number] = edgeRoute?.startFixedPoint ?? [0.5, 0.5];
-      const endFixedPoint: [number, number] = edgeRoute?.endFixedPoint ?? [0.5, 0.5];
 
       const { minX: bMinX, minY: bMinY, maxX: bMaxX, maxY: bMaxY } = computeBounds(points);
       const boundsWidth = bMaxX - bMinX;
@@ -766,8 +763,8 @@ export class Diagram {
         elbowed: isElbowed,
         opacity: co?.opacity ?? 100,
         angle: 0,
-        startBinding: { elementId: edge.from, focus: 0, gap: 1, fixedPoint: startFixedPoint as [number, number] },
-        endBinding: { elementId: edge.to, focus: 0, gap: 1, fixedPoint: endFixedPoint as [number, number] },
+        startBinding: null,
+        endBinding: null,
         startArrowhead: co?.startArrowhead ?? null,
         endArrowhead: co?.endArrowhead ?? "arrow",
         groupIds: [],
@@ -780,7 +777,7 @@ export class Diagram {
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
-        ...(co?.customData !== undefined ? { customData: co.customData } : {}),
+        customData: { ...(co?.customData ?? {}), _from: edge.from, _to: edge.to },
       });
 
       // Arrow label placement

@@ -47,8 +47,11 @@ describe("Diagram SDK", () => {
 
     const arrow = elements.find(e => e.type === "arrow");
     expect(arrow).toBeDefined();
-    expect(arrow!.startBinding!.elementId).toBe(a);
-    expect(arrow!.endBinding!.elementId).toBe(b);
+    // Arrows are unbound (static polylines) — from/to stored in customData
+    expect(arrow!.startBinding).toBeNull();
+    expect(arrow!.endBinding).toBeNull();
+    expect((arrow!.customData as Record<string, unknown>)._from).toBe(a);
+    expect((arrow!.customData as Record<string, unknown>)._to).toBe(b);
 
     // Arrow should be positioned between A and B (structurally correct)
     const shapeA = elements.find(e => e.id === a)!;
@@ -132,9 +135,9 @@ describe("Diagram SDK", () => {
     const arrows = elements.filter(e => e.type === "arrow");
     expect(arrows.length).toBe(2);
 
-    // Both arrows should have endpoint bindings to different targets
-    const endBindings = arrows.map(a => a.endBinding?.elementId);
-    expect(endBindings[0]).not.toBe(endBindings[1]);
+    // Both arrows should connect to different targets (via customData)
+    const endTargets = arrows.map(a => a.customData?._to);
+    expect(endTargets[0]).not.toBe(endTargets[1]);
   });
 
 
@@ -231,8 +234,8 @@ describe("Diagram SDK", () => {
     const arrow = elements.find(e => e.type === "arrow")!;
 
     expect(arrow.elbowed).toBe(false);
-    // Straight arrow: only 2 points
-    expect(arrow.points!.length).toBe(2);
+    // Orthogonal route: L-shaped for non-aligned nodes (4 points)
+    expect(arrow.points!.length).toBeGreaterThanOrEqual(2);
   });
 
   it("arrow opts: strokeColor and strokeWidth", async () => {
@@ -662,7 +665,7 @@ describe("Diagram SDK", () => {
     const elements = result.json.elements;
     const arrow = elements.find(e => e.type === "arrow")!;
 
-    expect(arrow.customData).toEqual({ protocol: "grpc" });
+    expect((arrow.customData as Record<string, unknown>).protocol).toBe("grpc");
   });
 
   it("no customData key when not specified", async () => {

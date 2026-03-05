@@ -242,17 +242,16 @@ describe("e2e: MCP draw tool", () => {
     expect(types.filter(t => t === "arrow").length).toBe(3);
     expect(types.filter(t => t === "text").length).toBeGreaterThanOrEqual(7); // 4 shape labels + 3 arrow labels
 
-    // Verify arrows have correct bindings
+    // Verify arrows are unbound (static polylines) with from/to in customData
     const arrows = elements.filter(e => e.type === "arrow");
     for (const arrow of arrows) {
-      const startBinding = arrow.startBinding as { elementId: string } | null;
-      const endBinding = arrow.endBinding as { elementId: string } | null;
-      expect(startBinding).toBeDefined();
-      expect(endBinding).toBeDefined();
+      expect(arrow.startBinding).toBeNull();
+      expect(arrow.endBinding).toBeNull();
 
-      // Source and target should exist in elements
-      expect(elements.find(e => e.id === startBinding!.elementId)).toBeDefined();
-      expect(elements.find(e => e.id === endBinding!.elementId)).toBeDefined();
+      // Source and target stored in customData should exist in elements
+      const cd = arrow.customData as { _from: string; _to: string };
+      expect(elements.find(e => e.id === cd._from)).toBeDefined();
+      expect(elements.find(e => e.id === cd._to)).toBeDefined();
     }
 
     // Verify arrow labels
