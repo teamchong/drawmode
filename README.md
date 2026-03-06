@@ -7,10 +7,10 @@ Code Mode MCP server for generating Excalidraw architecture diagrams. Instead of
 - **Code Mode** — LLM writes TypeScript, not raw JSON. One tool, typed SDK, zero prompt engineering
 - **Automatic layout** — Graphviz `dot` engine (Sugiyama algorithm) with crossing minimization and orthogonal edge routing
 - **10 semantic color presets** + 18 cloud provider presets (AWS, Azure, GCP, K8s)
-- **4 output formats** — `.excalidraw` file, excalidraw.com URL, PNG, SVG
+- **4 output formats** — `.excalidraw` file, excalidraw.com URL, PNG, SVG (multi-format in one call)
 - **Interactive HTML widget** — live Excalidraw preview in Claude Desktop and Cowork via MCP structured content
 - **Edit existing diagrams** — `Diagram.fromFile()` loads `.excalidraw` files for modification
-- **Groups and frames** — visual containment with dashed boundaries or Excalidraw frames
+- **Groups and frames** — visual containment with customizable boundaries (padding, color, style, opacity)
 - **Diamonds and ellipses** — flowchart decision nodes, database cylinders
 - **Zig WASM validation** — catches broken bindings, duplicate IDs, overlapping elements
 - **Deploy anywhere** — local stdio, local HTTP, or Cloudflare Workers (remote MCP)
@@ -56,7 +56,7 @@ drawmode:     LLM → 10 lines of TypeScript → SDK + Graphviz → valid diagra
 3. Local executor runs it — SDK handles labels, colors, IDs
 4. Graphviz `dot` engine handles layout positioning and edge routing (with orthogonal splines)
 5. Zig WASM handles validation
-6. Output: `.excalidraw` file, excalidraw.com URL, PNG, or SVG
+6. Output: `.excalidraw` file, excalidraw.com URL, PNG, SVG, or multiple formats at once. A `.drawmode.ts` sidecar preserves source code for iteration.
 
 ```typescript
 const d = new Diagram();
@@ -66,7 +66,7 @@ const cache = d.addBox("Redis", { row: 1, col: 2, color: "cache" });
 d.connect(api, db, "queries");
 d.connect(api, cache, "reads", { style: "dashed" });
 d.addGroup("Data Layer", [db, cache]);
-return d.render({ format: "url" });
+return d.render({ format: ["excalidraw", "png"], path: "arch" });
 ```
 
 ## SDK API
@@ -84,7 +84,7 @@ d.addText(text, opts?)
 d.addLine(points, opts?)
 
 // Groups and frames
-d.addGroup(label, children[])
+d.addGroup(label, children[], opts?)  // opts: padding, strokeColor, strokeStyle, opacity
 d.addFrame(name, children[])
 
 // Connections
@@ -115,6 +115,7 @@ interface ShapeOpts {
   verticalAlign?: "top" | "middle";
   link?: string | null;                   // hyperlink URL
   customData?: Record<string, unknown> | null; // arbitrary metadata
+  icon?: string;              // "database", "cloud", "lock", "server", "docker", etc. or raw emoji
 }
 ```
 
@@ -131,6 +132,7 @@ interface ConnectOpts {
   endArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";  // default "arrow"
   elbowed?: boolean;          // default true
   labelFontSize?: number;
+  labelPosition?: "start" | "middle" | "end";  // where to place edge label
   customData?: Record<string, unknown> | null; // arbitrary metadata
 }
 ```
@@ -193,6 +195,8 @@ return d.render({ path: "diagram.excalidraw" });
 | `url` | Shareable excalidraw.com link | All clients |
 | `png` | PNG image (via puppeteer) | Local with puppeteer, Cloudflare Worker |
 | `svg` | SVG markup | Local with puppeteer |
+
+Pass an array for multiple formats at once: `format: ["excalidraw", "png"]`. A `.drawmode.ts` sidecar file is always written alongside file output, preserving the source code for future iteration via `Diagram.fromFile()`.
 
 ## Architecture
 

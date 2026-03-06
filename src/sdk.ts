@@ -1191,6 +1191,50 @@ export class Diagram {
     const elements: ExcalidrawElement[] = [];
     const { positioned, edgeRoutes, groupBounds } = await this.layoutNodes(warnings);
 
+    // Nudge non-member nodes out of group bounding boxes (grid fallback only).
+    // Graphviz clusters handle containment properly; grid layout can place
+    // bystander nodes inside a group's child bbox by coincidence.
+    if (!groupBounds && this.groups.size > 0) {
+      for (const [_groupId, group] of this.groups) {
+        const childNodes = group.children
+          .map(c => positioned.get(c))
+          .filter((n): n is PositionedNode => n !== undefined);
+        if (childNodes.length === 0) continue;
+
+        const padding = group.opts?.padding ?? 30;
+        const allBounds = childNodes.map(n => ({ x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height }));
+        const { minX, minY, maxX, maxY } = computeNodeBounds(allBounds);
+        const gx = minX - padding;
+        const gy = minY - padding - 20;
+        const gw = (maxX + padding) - gx;
+        const gh = (maxY + padding) - gy;
+
+        // Check every non-member node
+        for (const [nodeId, node] of positioned) {
+          if (group.children.includes(nodeId)) continue;
+          const nx = node.x ?? 0, ny = node.y ?? 0;
+          if (!rectsOverlap(gx, gy, gw, gh, nx, ny, node.width, node.height, 5)) continue;
+
+          // Find smallest displacement to push node outside group bbox
+          const pushLeft = (gx - 5) - (nx + node.width);
+          const pushRight = (gx + gw + 5) - nx;
+          const pushUp = (gy - 5) - (ny + node.height);
+          const pushDown = (gy + gh + 5) - ny;
+
+          // Pick smallest absolute displacement
+          const candidates = [
+            { dx: pushLeft, dy: 0 },
+            { dx: pushRight, dy: 0 },
+            { dx: 0, dy: pushUp },
+            { dx: 0, dy: pushDown },
+          ];
+          candidates.sort((a, b) => (Math.abs(a.dx) + Math.abs(a.dy)) - (Math.abs(b.dx) + Math.abs(b.dy)));
+          node.x = nx + candidates[0].dx;
+          node.y = ny + candidates[0].dy;
+        }
+      }
+    }
+
     // Pre-compute arrow IDs (one per edge, in order)
     const arrowIds: string[] = [];
     for (let i = 0; i < this.edges.length; i++) {

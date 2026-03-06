@@ -206,3 +206,38 @@ What we learn should directly change the README messaging, feature priority, and
 **Rating:** 8/10 — "Happy path is excellent. Iteration story needs work."
 
 **Actions taken:** All 7 pain points addressed in commits `e24e267` through `48c24cf`.
+
+### Interview 2 — K8s deployment architecture (2026-03-06)
+
+**Participant:** Internal hands-on session (Segment B — AI tool power user)
+**Tools:** Latest local build (post-fixes from Interview 1)
+**Task:** Generate a Kubernetes deployment architecture diagram (10 nodes, 11 edges, 2 groups, cloud color presets, icons)
+
+**What worked well:**
+- "Straight arrows look much better than the curved ones — the diagram reads cleanly."
+- "Multi-format output is great — got excalidraw + png + svg in one render call."
+- "Icons (user, cloud, api, database, cache, queue) add clarity with zero effort."
+- "Color presets for cloud providers (aws-network, aws-storage, k8s-ingress) are intuitive."
+- "Sidecar `.drawmode.ts` written automatically — source code preserved for iteration."
+
+**Pain points identified:**
+1. **Group boundary encloses non-member nodes** — K8s Cluster group visually encloses the CDN node (not a group member) because the bounding box spans from Frontend (row:2, col:0) to Ingress (row:1, col:2), encompassing CDN at (row:1, col:0). Groups compute a simple bounding box that can trap bystander nodes.
+2. **Arrow congestion in dense columns** — API Server has 5 outgoing connections; the arrows from API→PostgreSQL, API→Redis, API→RabbitMQ run very close together, making edge labels hard to read.
+3. **Edge label clipping** — The "consumes" label (RabbitMQ→Worker, dashed) renders at the far right edge, partially outside the comfortable viewing area.
+4. **Grid fallback vs Graphviz** — Without Graphviz (tsx context), grid fallback places nodes on a rigid grid. Graphviz would route arrows better and avoid the congestion issue.
+
+**Rating:** 7/10 — "Visual quality is good. Group bounding box issue is the main problem — it misleads about what's inside vs outside a boundary."
+
+**Iteration test (fromFile → modify → re-render):**
+- Loaded `interview-k8s` (10 nodes, 11 edges) via `Diagram.fromFile()`
+- `findByLabel("API Server")` and `findByLabel("Worker")` both found correct nodes
+- Added Prometheus + Grafana + 3 edges + Monitoring group
+- Re-rendered: 12 nodes, 14 edges, 3 groups — all correct
+- Monitoring group rendered cleanly at col:3 with dotted red boundary
+- Dotted "metrics" arrows visually distinct from solid/dashed arrows
+- Verdict: **Iteration workflow works well.** Load → find → modify → re-render is smooth.
+
+**Actions needed:**
+- [x] Group bounding box traps bystanders → **Fixed** (non-member nodes nudged outside group bbox with minimal displacement)
+- [ ] Arrow spacing: when multiple edges leave the same node vertically, stagger exit points more aggressively
+- [ ] Label clipping: detect labels near canvas edge and nudge inward

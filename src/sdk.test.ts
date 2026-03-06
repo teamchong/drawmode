@@ -1538,6 +1538,35 @@ A[Start]-->B[End]`);
       }
     });
 
+    it("non-member nodes nudged outside group bounding box", async () => {
+      // Reproduce Interview 2 bug: CDN at (row:1,col:0) trapped inside K8s Cluster
+      // group whose children span row:1-2, col:0-2
+      const d = new Diagram();
+      const cdn = d.addBox("CDN", { row: 1, col: 0 });
+      const ingress = d.addBox("Ingress", { row: 1, col: 2 });
+      const frontend = d.addBox("Frontend", { row: 2, col: 0 });
+      const api = d.addBox("API", { row: 2, col: 1 });
+      const worker = d.addBox("Worker", { row: 2, col: 2 });
+      d.addGroup("K8s Cluster", [ingress, frontend, api, worker]);
+
+      const result = await d.render({ format: "excalidraw" });
+      const els = result.json.elements;
+
+      // Find the group rectangle
+      const group = els.find(e => e.type === "rectangle" && e.strokeStyle === "dashed" && e.backgroundColor === "transparent");
+      expect(group).toBeDefined();
+
+      // Find CDN node
+      const cdnEl = els.find(e => e.id === cdn);
+      expect(cdnEl).toBeDefined();
+
+      // CDN should NOT be inside the group bounding box
+      const gx = group!.x, gy = group!.y, gw = group!.width, gh = group!.height;
+      const cx = cdnEl!.x, cy = cdnEl!.y, cw = cdnEl!.width, ch = cdnEl!.height;
+      const inside = cx >= gx && cy >= gy && cx + cw <= gx + gw && cy + ch <= gy + gh;
+      expect(inside).toBe(false);
+    });
+
     it("all arrowhead types wire through", async () => {
       const arrowheadTypes = [null, "arrow", "bar", "dot", "triangle", "diamond", "diamond_outline"] as const;
 
