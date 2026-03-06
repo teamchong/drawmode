@@ -36,6 +36,7 @@ interface ShapeOpts {
   verticalAlign?: VerticalAlign;
   link?: string | null;                  // hyperlink URL
   customData?: Record<string, unknown> | null; // arbitrary metadata
+  icon?: string;  // Preset: "database","cloud","lock","server","docker","lambda","api","queue","cache","user","k8s" or raw emoji
 }
 
 interface ConnectOpts {
@@ -52,6 +53,12 @@ interface ConnectOpts {
 }
 
 declare class Diagram {
+  /** Create a diagram. Optional theme sets defaults for all shapes. */
+  constructor(opts?: { theme?: "default" | "sketch" | "blueprint" | "minimal" });
+
+  /** Set a theme preset. "sketch"=hachure/rough, "blueprint"=clean/monospace, "minimal"=thin/helvetica */
+  setTheme(theme: "default" | "sketch" | "blueprint" | "minimal"): void;
+
   /** Add a rectangle. Returns element ID. */
   addBox(label: string, opts?: ShapeOpts): string;
 
@@ -90,6 +97,9 @@ declare class Diagram {
 
   /** Load existing .excalidraw file for editing. */
   static fromFile(path: string): Promise<Diagram>;
+
+  /** Import a Mermaid graph definition. Supports graph TD/LR, nodes, edges, subgraphs. */
+  static fromMermaid(syntax: string): Diagram;
 
   /** Find node IDs by label match. Substring by default, exact with opts. */
   findByLabel(label: string, opts?: { exact?: boolean }): string[];

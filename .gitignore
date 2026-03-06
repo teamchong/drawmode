@@ -13,6 +13,9 @@ diagram.*
 test-output.*
 test.svg
 
+# Visual regression test diffs
+src/__snapshots__/diffs/
+
 # Environment
 .env
 .env.local

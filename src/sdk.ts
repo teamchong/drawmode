@@ -8,6 +8,7 @@ import type {
   GraphNode, GraphEdge, FillStyle, StrokeStyle, FontFamily,
   Arrowhead, TextAlign, VerticalAlign, ColorPair,
   ExcalidrawElement, ExcalidrawFile,
+  ThemePreset, ThemeOpts,
 } from "./types.js";
 import { COLOR_PALETTE, ExcalidrawFileSchema } from "./types.js";
 import {
@@ -16,6 +17,100 @@ import {
   type EdgeRoute,
   type GroupBounds,
 } from "./layout.js";
+
+/** Compare old and new Excalidraw elements to produce a human-readable change summary. */
+function computeChangeSummary(oldElements: ExcalidrawElement[], newElements: ExcalidrawElement[]): string | undefined {
+  // Index old elements: shapes/text by id, arrows by _from+_to
+  const oldShapes = new Map<string, ExcalidrawElement>();
+  const newShapes = new Map<string, ExcalidrawElement>();
+  let oldArrowCount = 0, newArrowCount = 0;
+
+  for (const el of oldElements) {
+    if (el.type === "arrow") { oldArrowCount++; continue; }
+    // Skip bound text (they follow their container)
+    if (el.type === "text" && el.containerId) continue;
+    // Skip group labels
+    if (el.type === "text" && el.id.endsWith("-label")) continue;
+    oldShapes.set(el.id, el);
+  }
+  for (const el of newElements) {
+    if (el.type === "arrow") { newArrowCount++; continue; }
+    if (el.type === "text" && el.containerId) continue;
+    if (el.type === "text" && el.id.endsWith("-label")) continue;
+    newShapes.set(el.id, el);
+  }
+
+  const added: string[] = [];
+  const removed: string[] = [];
+  const moved: string[] = [];
+  let unchanged = 0;
+
+  const modified: string[] = [];
+
+  // Find added, modified, moved, unchanged
+  for (const [id, el] of newShapes) {
+    const old = oldShapes.get(id);
+    if (!old) {
+      const boundText = newElements.find(e => e.type === "text" && e.containerId === id);
+      const label = el.text ?? boundText?.text ?? id;
+      added.push(`"${label}" (${el.type})`);
+    } else {
+      const boundTextNew = newElements.find(e => e.type === "text" && e.containerId === id);
+      const boundTextOld = oldElements.find(e => e.type === "text" && e.containerId === id);
+      const newLabel = el.text ?? boundTextNew?.text ?? "";
+      const oldLabel = old.text ?? boundTextOld?.text ?? "";
+      const dx = Math.abs((el.x ?? 0) - (old.x ?? 0));
+      const dy = Math.abs((el.y ?? 0) - (old.y ?? 0));
+      if (newLabel !== oldLabel) {
+        modified.push(`"${oldLabel}" → "${newLabel}"`);
+      } else if (dx > 5 || dy > 5) {
+        moved.push(`"${newLabel}"`);
+      } else {
+        unchanged++;
+      }
+    }
+  }
+
+  // Find removed
+  for (const [id, el] of oldShapes) {
+    if (!newShapes.has(id)) {
+      const boundText = oldElements.find(e => e.type === "text" && e.containerId === id);
+      const label = el.text ?? boundText?.text ?? id;
+      removed.push(`"${label}" (${el.type})`);
+    }
+  }
+
+  const edgeDiff = newArrowCount - oldArrowCount;
+
+  // No changes at all
+  if (added.length === 0 && removed.length === 0 && moved.length === 0 && modified.length === 0 && edgeDiff === 0) return undefined;
+
+  const lines: string[] = [];
+  if (added.length > 0) lines.push(`+ Added: ${added.join(", ")}`);
+  if (removed.length > 0) lines.push(`- Removed: ${removed.join(", ")}`);
+  if (modified.length > 0) lines.push(`~ Modified: ${modified.join(", ")}`);
+  if (moved.length > 0) lines.push(`~ Moved: ${moved.join(", ")}`);
+  if (edgeDiff > 0) lines.push(`+ ${edgeDiff} edge(s) added`);
+  if (edgeDiff < 0) lines.push(`- ${Math.abs(edgeDiff)} edge(s) removed`);
+  if (unchanged > 0) lines.push(`  Unchanged: ${unchanged} node(s)`);
+  return lines.join("\n");
+}
+
+const ICON_PRESETS: Record<string, string> = {
+  lambda: "λ", docker: "🐳", database: "🗄️", db: "🗄️",
+  cloud: "☁️", lock: "🔒", globe: "🌐", server: "🖥️",
+  api: "🔌", queue: "📨", cache: "⚡", storage: "💾",
+  user: "👤", users: "👥", warning: "⚠️", check: "✅",
+  fire: "🔥", key: "🔑", mail: "📧", search: "🔍",
+  kubernetes: "☸️", k8s: "☸️",
+};
+
+const THEME_PRESETS: Record<ThemePreset, ThemeOpts> = {
+  default: {},
+  sketch: { fillStyle: "hachure", roughness: 2, fontFamily: 1 },
+  blueprint: { fillStyle: "solid", roughness: 0, strokeWidth: 1, fontFamily: 3 },
+  minimal: { fillStyle: "solid", roughness: 0, strokeWidth: 1, fontFamily: 2, opacity: 90 },
+};
 
 const DEFAULT_WIDTH = 180;
 const DEFAULT_HEIGHT = 80;
@@ -30,6 +125,31 @@ function getLineHeight(fontFamily: FontFamily): number {
   if (fontFamily === 2) return 1.15;
   if (fontFamily === 3) return 1.2;
   return 1.25; // Virgil (1) and default
+}
+
+/** Average character width as a fraction of fontSize, per font family */
+const CHAR_WIDTH_FACTOR: Record<FontFamily, number> = {
+  1: 0.60,  // Virgil (handwritten)
+  2: 0.55,  // Helvetica (proportional)
+  3: 0.60,  // Cascadia (monospace)
+};
+
+/** Measure text dimensions accounting for font family and size.
+ *  Emoji/wide chars (codepoint > 0x1F00) count as 2x width. */
+function measureText(text: string, fontSize = 16, fontFamily: FontFamily = 1): { width: number; height: number } {
+  const lines = text.split("\n");
+  const charWidth = fontSize * CHAR_WIDTH_FACTOR[fontFamily];
+  const maxLineLen = Math.max(...lines.map(l => {
+    let w = 0;
+    for (const ch of l) {
+      w += (ch.codePointAt(0)! > 0x1F00) ? 2 : 1;
+    }
+    return w;
+  }));
+  return {
+    width: maxLineLen * charWidth,
+    height: lines.length * fontSize * getLineHeight(fontFamily),
+  };
 }
 
 const SESSION_SEED = Date.now().toString(36);
@@ -69,6 +189,18 @@ export class Diagram {
   /** Passthrough elements from fromFile() — re-emitted unchanged */
   private passthrough: ExcalidrawElement[] = [];
   private idCounter = 0;
+  private themeDefaults: ThemeOpts = {};
+
+  constructor(opts?: { theme?: ThemePreset }) {
+    if (opts?.theme) {
+      this.themeDefaults = THEME_PRESETS[opts.theme] ?? {};
+    }
+  }
+
+  /** Set a theme preset that applies defaults to all subsequently added shapes. */
+  setTheme(theme: ThemePreset): void {
+    this.themeDefaults = THEME_PRESETS[theme] ?? {};
+  }
 
   private nextId(prefix: string): string {
     return `${prefix}_${++this.idCounter}_${SESSION_SEED}`;
@@ -91,20 +223,27 @@ export class Diagram {
 
   private addShape(prefix: string, type: GraphNode["type"], label: string, opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): string {
     const id = this.nextId(prefix);
-    const lines = label.split("\n");
-    const extraLines = lines.length - 1;
-    // Auto-size width from longest line (~9px per char + 40px padding)
-    const longestLine = Math.max(...lines.map(l => l.length));
-    const autoWidth = Math.max(DEFAULT_WIDTH, longestLine * 9 + 40);
+    // Merge theme defaults under per-node opts (per-node wins)
+    const mergedOpts: ShapeOpts | undefined = Object.keys(this.themeDefaults).length > 0
+      ? { ...this.themeDefaults, ...opts } as ShapeOpts
+      : opts;
+    let displayLabel = label;
+    if (mergedOpts?.icon) {
+      const emoji = ICON_PRESETS[mergedOpts.icon] ?? mergedOpts.icon;
+      displayLabel = `${emoji}\n${label}`;
+    }
+    const extraLines = displayLabel.split("\n").length - 1;
+    const measured = measureText(displayLabel, mergedOpts?.fontSize ?? 16, mergedOpts?.fontFamily ?? 1);
+    const autoWidth = Math.max(DEFAULT_WIDTH, measured.width + 40);
     this.nodes.set(id, {
-      id, label, type,
-      row: opts?.row, col: opts?.col,
-      width: opts?.width ?? autoWidth,
-      height: opts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT),
-      color: resolveColor(opts, defaultPreset),
-      opts,
-      absX: opts?.x,
-      absY: opts?.y,
+      id, label: displayLabel, type,
+      row: mergedOpts?.row, col: mergedOpts?.col,
+      width: mergedOpts?.width ?? autoWidth,
+      height: mergedOpts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT),
+      color: resolveColor(mergedOpts, defaultPreset),
+      opts: mergedOpts,
+      absX: mergedOpts?.x,
+      absY: mergedOpts?.y,
     });
     return id;
   }
@@ -120,12 +259,11 @@ export class Diagram {
     const paletteColor = COLOR_PALETTE[preset];
     const strokeColor = opts?.strokeColor ?? paletteColor.stroke;
     const fontSize = opts?.fontSize ?? 16;
-    const textLines = text.split("\n");
-    const maxLineLen = textLines.reduce((max, l) => Math.max(max, l.length), 0);
+    const textMeasured = measureText(text, fontSize, opts?.fontFamily ?? 1);
     this.nodes.set(id, {
       id, label: text, type: "text",
-      width: maxLineLen * fontSize * 0.6 + 16,
-      height: textLines.length * (fontSize * 1.5) + 8,
+      width: textMeasured.width + 16,
+      height: textMeasured.height + 8,
       color: { background: "transparent", stroke: strokeColor },
       opts: { x: opts?.x, y: opts?.y, fontSize: opts?.fontSize, fontFamily: opts?.fontFamily },
       absX: opts?.x,
@@ -154,7 +292,8 @@ export class Diagram {
     return id;
   }
 
-  /** Group elements together with a dashed boundary and label. */
+  /** Group elements together with a dashed boundary and label.
+   *  Children can be node IDs or other group IDs (for nesting). */
   addGroup(label: string, children: string[]): string {
     const id = this.nextId("grp");
     this.groups.set(id, { label, children });
@@ -373,6 +512,243 @@ export class Diagram {
       }
     }
 
+    // Advance idCounter past any loaded IDs to avoid collisions when adding new nodes
+    for (const id of [...d.nodes.keys(), ...d.groups.keys(), ...d.frames.keys()]) {
+      const match = id.match(/^[a-z]+_(\d+)_/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num >= d.idCounter) d.idCounter = num + 1;
+      }
+    }
+
+    return d;
+  }
+
+  /** Import a Mermaid graph definition. Supports graph TD/LR, nodes, edges, subgraphs. */
+  static fromMermaid(syntax: string): Diagram {
+    const d = new Diagram();
+    const lines = syntax.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("%%"));
+
+    // Parse direction — may be on its own line or before a semicolon
+    let direction: "TD" | "LR" = "TD";
+    if (lines[0]) {
+      const dirMatch = lines[0].match(/^(?:graph|flowchart)\s+(TD|TB|LR|RL)\b/i);
+      if (dirMatch) {
+        direction = (dirMatch[1].toUpperCase() === "LR" || dirMatch[1].toUpperCase() === "RL") ? "LR" : "TD";
+        // Remove the direction prefix; keep anything after the semicolon
+        const afterDir = lines[0].replace(/^(?:graph|flowchart)\s+(?:TD|TB|LR|RL)\s*;?\s*/i, "");
+        if (afterDir) {
+          lines[0] = afterDir;
+        } else {
+          lines.shift();
+        }
+      } else if (lines[0].match(/^(?:graph|flowchart)\s*$/i)) {
+        lines.shift();
+      }
+    }
+
+    // Track created node IDs by mermaid name
+    const nodeMap = new Map<string, string>();
+    // Track subgraph stack
+    const subgraphStack: { label: string; children: string[] }[] = [];
+
+    // Helper: ensure a node exists, create if needed
+    const ensureNode = (name: string, label?: string, shape?: string): string => {
+      if (nodeMap.has(name)) return nodeMap.get(name)!;
+      const nodeLabel = label ?? name;
+      let id: string;
+      if (shape === "circle") {
+        id = d.addEllipse(nodeLabel);
+      } else if (shape === "diamond") {
+        id = d.addDiamond(nodeLabel);
+      } else if (shape === "database") {
+        id = d.addBox(nodeLabel, { color: "database" });
+      } else {
+        id = d.addBox(nodeLabel);
+      }
+      nodeMap.set(name, id);
+      // Add to current subgraph if any
+      if (subgraphStack.length > 0) {
+        subgraphStack[subgraphStack.length - 1].children.push(id);
+      }
+      return id;
+    };
+
+    // Parse node definition: extract name, label, and shape from patterns like A[Label], B{Label}, C((Label)), D[(Label)]
+    const parseNodeDef = (raw: string): { name: string; label?: string; shape?: string } => {
+      raw = raw.trim();
+      // (( )) — circle
+      let m = raw.match(/^([A-Za-z0-9_-]+)\(\((.+?)\)\)$/);
+      if (m) return { name: m[1], label: m[2], shape: "circle" };
+      // [( )] — database
+      m = raw.match(/^([A-Za-z0-9_-]+)\[\((.+?)\)\]$/);
+      if (m) return { name: m[1], label: m[2], shape: "database" };
+      // { } — diamond
+      m = raw.match(/^([A-Za-z0-9_-]+)\{(.+?)\}$/);
+      if (m) return { name: m[1], label: m[2], shape: "diamond" };
+      // ( ) — rounded box (just a box for us)
+      m = raw.match(/^([A-Za-z0-9_-]+)\((.+?)\)$/);
+      if (m) return { name: m[1], label: m[2], shape: "box" };
+      // [ ] — box
+      m = raw.match(/^([A-Za-z0-9_-]+)\[(.+?)\]$/);
+      if (m) return { name: m[1], label: m[2], shape: "box" };
+      // Plain name
+      m = raw.match(/^([A-Za-z0-9_-]+)$/);
+      if (m) return { name: m[1] };
+      return { name: raw };
+    };
+
+    // Process lines (may contain multiple statements separated by ;)
+    const statements: string[] = [];
+    for (const line of lines) {
+      for (const stmt of line.split(";")) {
+        const s = stmt.trim();
+        if (s) statements.push(s);
+      }
+    }
+
+    // Edge pattern: captures source, arrow, optional label, and the rest (may chain)
+    // Arrows: -->, ---, -.->  , ==>
+    // The source is a non-greedy match of a node def (name + optional shape brackets)
+    const edgeRegex = /^([A-Za-z0-9_-]+(?:\[.*?\]|\{.*?\}|\(\(.*?\)\)|\[\(.*?\)\]|\(.*?\))?)\s*(==>|-->|---|-\.->)\s*(?:\|([^|]*)\|\s*)?(.+)$/;
+
+    const parseEdgeOpts = (arrow: string): ConnectOpts | undefined => {
+      const connectOpts: ConnectOpts = {};
+      if (arrow === "-.->") connectOpts.style = "dashed";
+      if (arrow === "==>") connectOpts.strokeWidth = 4;
+      if (arrow === "---") connectOpts.endArrowhead = null;
+      return Object.keys(connectOpts).length > 0 ? connectOpts : undefined;
+    };
+
+    for (const stmt of statements) {
+      // Subgraph
+      const subMatch = stmt.match(/^subgraph\s+(.+)$/i);
+      if (subMatch) {
+        subgraphStack.push({ label: subMatch[1].trim(), children: [] });
+        continue;
+      }
+      if (stmt.toLowerCase() === "end" && subgraphStack.length > 0) {
+        const sg = subgraphStack.pop()!;
+        const groupId = d.addGroup(sg.label, sg.children);
+        // If nested, add group to parent subgraph
+        if (subgraphStack.length > 0) {
+          subgraphStack[subgraphStack.length - 1].children.push(groupId);
+        }
+        continue;
+      }
+
+      // Try edge parse — handle chains like A-->B-->C
+      let remaining = stmt;
+      let foundEdge = false;
+      let prevId: string | undefined;
+
+      while (true) {
+        const edgeMatch = remaining.match(edgeRegex);
+        if (!edgeMatch) break;
+        foundEdge = true;
+        const [, rawSrc, arrow, edgeLabel, rest] = edgeMatch;
+        const srcDef = parseNodeDef(rawSrc.trim());
+        const srcId = prevId ?? ensureNode(srcDef.name, srcDef.label, srcDef.shape);
+
+        // The rest might be another chain: try to split off just the target node
+        // Check if rest contains another arrow
+        const nextArrowMatch = rest.match(/^([A-Za-z0-9_-]+(?:\[.*?\]|\{.*?\}|\(\(.*?\)\)|\[\(.*?\)\]|\(.*?\))?)\s*(==>|-->|---|-\.->)/);
+        let rawTgt: string;
+        if (nextArrowMatch) {
+          rawTgt = nextArrowMatch[1];
+          remaining = rest; // Continue parsing from rest
+        } else {
+          rawTgt = rest.trim();
+          remaining = ""; // No more edges
+        }
+
+        const tgtDef = parseNodeDef(rawTgt.trim());
+        const tgtId = ensureNode(tgtDef.name, tgtDef.label, tgtDef.shape);
+        d.connect(srcId, tgtId, edgeLabel?.trim() || undefined, parseEdgeOpts(arrow));
+        prevId = tgtId;
+
+        if (!nextArrowMatch) break;
+      }
+
+      if (foundEdge) continue;
+
+      // Standalone node definition (no edge)
+      const nodeDef = parseNodeDef(stmt);
+      if (nodeDef.name && /^[A-Za-z0-9_-]+/.test(nodeDef.name)) {
+        ensureNode(nodeDef.name, nodeDef.label, nodeDef.shape);
+      }
+    }
+
+    // Assign rows/cols based on direction and topological depth
+    const depthMap = new Map<string, number>();
+    const allNodeNames = [...nodeMap.keys()];
+
+    // Build adjacency from edges
+    const adj = new Map<string, string[]>();
+    for (const name of allNodeNames) adj.set(name, []);
+    for (const edge of d.getEdges()) {
+      // Reverse-map IDs to names
+      const srcName = [...nodeMap.entries()].find(([, id]) => id === edge.from)?.[0];
+      const tgtName = [...nodeMap.entries()].find(([, id]) => id === edge.to)?.[0];
+      if (srcName && tgtName) {
+        adj.get(srcName)!.push(tgtName);
+      }
+    }
+
+    // BFS to compute depth
+    const visited = new Set<string>();
+    // Find roots (nodes with no incoming edges)
+    const hasIncoming = new Set<string>();
+    for (const [, targets] of adj) {
+      for (const t of targets) hasIncoming.add(t);
+    }
+    const roots = allNodeNames.filter(n => !hasIncoming.has(n));
+    if (roots.length === 0 && allNodeNames.length > 0) roots.push(allNodeNames[0]);
+
+    const queue: { name: string; depth: number }[] = roots.map(n => ({ name: n, depth: 0 }));
+    for (const r of roots) { visited.add(r); depthMap.set(r, 0); }
+
+    while (queue.length > 0) {
+      const { name, depth } = queue.shift()!;
+      for (const neighbor of (adj.get(name) ?? [])) {
+        const existingDepth = depthMap.get(neighbor) ?? -1;
+        if (depth + 1 > existingDepth) {
+          depthMap.set(neighbor, depth + 1);
+        }
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push({ name: neighbor, depth: depth + 1 });
+        }
+      }
+    }
+    // Assign unvisited nodes depth 0
+    for (const name of allNodeNames) {
+      if (!depthMap.has(name)) depthMap.set(name, 0);
+    }
+
+    // Group by depth and assign row/col
+    const byDepth = new Map<number, string[]>();
+    for (const [name, depth] of depthMap) {
+      if (!byDepth.has(depth)) byDepth.set(depth, []);
+      byDepth.get(depth)!.push(name);
+    }
+
+    for (const [depth, names] of byDepth) {
+      names.forEach((name, idx) => {
+        const nodeId = nodeMap.get(name);
+        if (!nodeId) return;
+        const node = (d as unknown as { nodes: Map<string, GraphNode> }).nodes.get(nodeId);
+        if (!node) return;
+        if (direction === "LR") {
+          node.col = depth;
+          node.row = idx;
+        } else {
+          node.row = depth;
+          node.col = idx;
+        }
+      });
+    }
+
     return d;
   }
 
@@ -465,7 +841,8 @@ export class Diagram {
 
   /** Render the diagram to the specified format. */
   async render(opts?: RenderOpts): Promise<RenderResult> {
-    const elements = await this.buildElements();
+    const warnings: string[] = [];
+    const elements = await this.buildElements(warnings);
 
     // WASM validation: log warnings to stderr if available
     if (isWasmLoaded()) {
@@ -475,8 +852,10 @@ export class Diagram {
           const errors = JSON.parse(errorsJson);
           if (Array.isArray(errors) && errors.length > 0) {
             for (const err of errors) {
+              const msg = `validation: ${err.msg} (${err.id})`;
+              warnings.push(msg);
               if (typeof process !== "undefined") {
-                process.stderr.write(`[drawmode] validation warning: ${err.msg} (${err.id})\n`);
+                process.stderr.write(`[drawmode] ${msg}\n`);
               }
             }
           }
@@ -496,17 +875,43 @@ export class Diagram {
     };
 
     const result: RenderResult = { json: excalidrawJson };
+    if (warnings.length > 0) result.warnings = warnings;
+
+    // Compute diagram stats
+    result.stats = {
+      nodes: this.nodes.size,
+      edges: this.edges.length,
+      groups: this.groups.size,
+    };
+
     const format = opts?.format ?? "excalidraw";
 
     if (format === "excalidraw") {
-      const { writeFile } = await import("node:fs/promises");
+      const { writeFile, readFile, access, copyFile } = await import("node:fs/promises");
       const path = opts?.path ?? "diagram.excalidraw";
+
+      // Auto-backup existing file before overwriting + compute diff
+      try {
+        await access(path);
+        const oldContent = await readFile(path, "utf-8");
+        await copyFile(path, path + ".bak");
+        try {
+          const oldFile = ExcalidrawFileSchema.parse(JSON.parse(oldContent));
+          const summary = computeChangeSummary(oldFile.elements, elements);
+          if (summary) result.changeSummary = summary;
+        } catch { /* old file unparseable — skip diff */ }
+      } catch { /* file doesn't exist yet — no backup needed */ }
+
       await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
       result.filePath = path;
 
       // Write sidecar .drawmode.ts if source code provided
       if (opts?.sourceCode && path.endsWith(".excalidraw")) {
         const sidecarPath = path.replace(/\.excalidraw$/, ".drawmode.ts");
+        try {
+          await access(sidecarPath);
+          await copyFile(sidecarPath, sidecarPath + ".bak");
+        } catch { /* no existing sidecar */ }
         await writeFile(sidecarPath, opts.sourceCode);
       }
     }
@@ -544,9 +949,9 @@ export class Diagram {
   }
 
   /** Convert the graph to Excalidraw elements with layout. */
-  private async buildElements(): Promise<ExcalidrawElement[]> {
+  private async buildElements(warnings?: string[]): Promise<ExcalidrawElement[]> {
     const elements: ExcalidrawElement[] = [];
-    const { positioned, edgeRoutes, groupBounds } = await this.layoutNodes();
+    const { positioned, edgeRoutes, groupBounds } = await this.layoutNodes(warnings);
 
     // Pre-compute arrow IDs (one per edge, in order)
     const arrowIds: string[] = [];
@@ -782,7 +1187,7 @@ export class Diagram {
         startBinding: null,
         endBinding: null,
         startArrowhead: co?.startArrowhead ?? null,
-        endArrowhead: co?.endArrowhead ?? "arrow",
+        endArrowhead: co?.endArrowhead !== undefined ? co.endArrowhead : "arrow",
         groupIds: [],
         frameId: null,
         isDeleted: false,
@@ -798,7 +1203,7 @@ export class Diagram {
 
       // Arrow label placement
       if (edge.label && labelTextId) {
-        const labelWidth = edge.label.length * 8 + 16;
+        const labelWidth = measureText(edge.label, co?.labelFontSize ?? 14, 1).width + 16;
         let labelX: number, labelY: number;
 
         if (edgeRoute?.labelPos) {
@@ -828,7 +1233,7 @@ export class Diagram {
           type: "text",
           x: labelX,
           y: labelY,
-          width: edge.label.length * 8 + 16,
+          width: labelWidth,
           height: 20,
           text: edge.label,
           fontSize: co?.labelFontSize ?? 14,
@@ -890,7 +1295,11 @@ export class Diagram {
       for (const gb of groupBounds) groupBoundsMap.set(gb.id, gb);
     }
 
-    for (const [groupId, group] of this.groups) {
+    // Render groups in dependency order: child groups before parents so parent bounds include children
+    const groupOrder = this.topologicalGroupOrder();
+
+    for (const groupId of groupOrder) {
+      const group = this.groups.get(groupId)!;
       let gx: number, gy: number, gw: number, gh: number;
 
       const gb = groupBoundsMap.get(groupId);
@@ -898,19 +1307,33 @@ export class Diagram {
         // Use Graphviz-computed cluster bounding box (non-overlapping)
         gx = gb.x; gy = gb.y; gw = gb.width; gh = gb.height;
       } else {
-        // Fallback: compute from child node positions
+        // Fallback: compute from child node positions + child group bounds
         const childNodes = group.children
           .map(c => positioned.get(c))
           .filter((n): n is PositionedNode => n !== undefined);
-        if (childNodes.length === 0) continue;
+        // Include child groups that have already been computed
+        const childGroupRects = group.children
+          .filter(c => groupBoundsMap.has(c))
+          .map(c => {
+            const cgb = groupBoundsMap.get(c)!;
+            return { x: cgb.x, y: cgb.y, width: cgb.width, height: cgb.height };
+          });
+        const allBounds = [
+          ...childNodes.map(n => ({ x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height })),
+          ...childGroupRects,
+        ];
+        if (allBounds.length === 0) continue;
 
         const padding = 30;
-        const { minX, minY, maxX, maxY } = computeNodeBounds(childNodes);
+        const { minX, minY, maxX, maxY } = computeNodeBounds(allBounds);
         gx = minX - padding;
         gy = minY - padding - 20;
         gw = (maxX + padding) - gx;
         gh = (maxY + padding) - gy;
       }
+
+      // Store computed bounds so parent groups can reference them
+      groupBoundsMap.set(groupId, { id: groupId, x: gx, y: gy, width: gw, height: gh });
 
       elements.push({
         id: groupId,
@@ -942,7 +1365,7 @@ export class Diagram {
         id: `${groupId}-label`,
         type: "text",
         x: gx + 10, y: gy + 5,
-        width: group.label.length * 8 + 16, height: 20,
+        width: measureText(group.label, 14, 1).width + 16, height: 20,
         text: group.label,
         fontSize: 14,
         fontFamily: 1,
@@ -1032,12 +1455,13 @@ export class Diagram {
   }
 
   /** Assign x,y positions to all nodes. Priority: WASM Graphviz → TS grid. */
-  private async layoutNodes(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] }> {
+  private async layoutNodes(warnings?: string[]): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] }> {
     // Try WASM Graphviz layout (async)
     const wasmResult = await this.layoutNodesWasm();
     if (wasmResult) return wasmResult;
 
     // Fallback: TS grid layout
+    warnings?.push("Graphviz layout unavailable; using grid fallback");
     return { positioned: this.layoutNodesGrid() };
   }
 
@@ -1053,9 +1477,21 @@ export class Diagram {
       type: n.type,
     }));
     const wasmEdges = this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
-    const wasmGroups = Array.from(this.groups.entries()).map(([id, g]) => ({
-      id, label: g.label, children: g.children,
-    }));
+    // Resolve nested groups: detect which children are group IDs and set parent relationships
+    const groupIds = new Set(this.groups.keys());
+    const wasmGroups = Array.from(this.groups.entries()).map(([id, g]) => {
+      // Separate node children from group children
+      const nodeChildren = g.children.filter(c => !groupIds.has(c));
+      // Find parent: if this group is a child of another group
+      let parent: string | undefined;
+      for (const [pid, pg] of this.groups) {
+        if (pid !== id && pg.children.includes(id)) {
+          parent = pid;
+          break;
+        }
+      }
+      return { id, label: g.label, children: nodeChildren, parent };
+    });
 
     const result = await layoutGraphWasm(wasmNodes, wasmEdges, wasmGroups.length > 0 ? wasmGroups : undefined);
     if (!result) return null;
@@ -1063,7 +1499,8 @@ export class Diagram {
     return { positioned: this.applyPositions(result.nodes), edgeRoutes: result.edgeRoutes, groupBounds: result.groupBounds };
   }
 
-  /** Apply layout positions to nodes, with absX/absY overrides and fallback for unpositioned nodes. */
+  /** Apply layout positions to nodes, with absX/absY overrides and fallback for unpositioned nodes.
+   *  WASM now returns correct positions for pinned nodes; the absX ?? pos.x override is a safety net. */
   private applyPositions(positions: { id: string; x: number; y: number }[]): Map<string, PositionedNode> {
     const result = new Map<string, PositionedNode>();
     for (const pos of positions) {
@@ -1122,6 +1559,28 @@ export class Diagram {
       }
     }
 
+    return result;
+  }
+
+  /** Topological order for groups: child groups before parents (so parent bounds include children). */
+  private topologicalGroupOrder(): string[] {
+    const groupIds = new Set(this.groups.keys());
+    const result: string[] = [];
+    const visited = new Set<string>();
+
+    const visit = (id: string) => {
+      if (visited.has(id)) return;
+      visited.add(id);
+      const group = this.groups.get(id);
+      if (!group) return;
+      // Visit child groups first
+      for (const child of group.children) {
+        if (groupIds.has(child)) visit(child);
+      }
+      result.push(id);
+    };
+
+    for (const id of groupIds) visit(id);
     return result;
   }
 }

@@ -8,10 +8,65 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body, #root { width: 100%; height: 100%; overflow: hidden; }
     #loading { display: flex; align-items: center; justify-content: center; height: 100%; font-family: sans-serif; color: #666; }
+
+    /* Toolbar */
+    #toolbar {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 10;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    #toolbar button {
+      padding: 4px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+      font-size: 12px;
+      font-family: sans-serif;
+      cursor: pointer;
+      color: #333;
+    }
+    #toolbar button:hover { background: #f0f0f0; }
+    #toolbar button:active { background: #e0e0e0; }
+
+    /* Stats badge */
+    #stats-badge {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      z-index: 10;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(0,0,0,0.06);
+      font-size: 11px;
+      font-family: sans-serif;
+      color: #666;
+      pointer-events: none;
+    }
+
+    /* Dark mode overrides */
+    .dark-mode #toolbar button {
+      background: #2d2d2d;
+      border-color: #555;
+      color: #ddd;
+    }
+    .dark-mode #toolbar button:hover { background: #3a3a3a; }
+    .dark-mode #stats-badge {
+      background: rgba(255,255,255,0.1);
+      color: #aaa;
+    }
   </style>
 </head>
 <body>
-  <div id="root"><div id="loading">Loading Excalidraw…</div></div>
+  <div id="root"><div id="loading">Loading Excalidraw...</div></div>
+  <div id="toolbar" style="display:none;">
+    <button id="btn-copy-png" title="Copy as PNG">Copy PNG</button>
+    <button id="btn-dark-mode" title="Toggle dark mode">Dark</button>
+  </div>
+  <div id="stats-badge" style="display:none;"></div>
 
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -20,22 +75,64 @@
   <script>
     // Wait for Excalidraw elements via postMessage from the MCP client
     let excalidrawAPI = null;
+    let isDarkMode = false;
+    let currentElements = [];
+
+    function showToolbar() {
+      document.getElementById("toolbar").style.display = "flex";
+    }
+
+    function updateStatsBadge(stats) {
+      const badge = document.getElementById("stats-badge");
+      if (!stats) { badge.style.display = "none"; return; }
+      const parts = [];
+      if (stats.nodes != null) parts.push(stats.nodes + " node" + (stats.nodes !== 1 ? "s" : ""));
+      if (stats.edges != null) parts.push(stats.edges + " edge" + (stats.edges !== 1 ? "s" : ""));
+      if (stats.groups > 0) parts.push(stats.groups + " group" + (stats.groups !== 1 ? "s" : ""));
+      badge.textContent = parts.join(", ");
+      badge.style.display = parts.length > 0 ? "block" : "none";
+    }
+
+    function computeStats(elements) {
+      if (!elements || !elements.length) return null;
+      var nodes = 0, edges = 0, groups = new Set();
+      for (var i = 0; i < elements.length; i++) {
+        var el = elements[i];
+        if (el.type === "arrow") { edges++; }
+        else if (el.type === "text" && el.containerId) { /* bound text, skip */ }
+        else if (el.type !== "text" || !el.containerId) { nodes++; }
+        if (el.groupIds) {
+          for (var j = 0; j < el.groupIds.length; j++) groups.add(el.groupIds[j]);
+        }
+      }
+      return { nodes: nodes, edges: edges, groups: groups.size };
+    }
 
     function renderExcalidraw(elements, appState) {
-      const root = document.getElementById("root");
+      var root = document.getElementById("root");
       root.innerHTML = "";
+      currentElements = elements || [];
 
-      const App = React.createElement(
+      var App = React.createElement(
         ExcalidrawLib.Excalidraw,
         {
           initialData: {
-            elements: elements || [],
+            elements: currentElements,
             appState: {
-              viewBackgroundColor: "#ffffff",
+              viewBackgroundColor: isDarkMode ? "#1e1e1e" : "#ffffff",
+              theme: isDarkMode ? "dark" : "light",
               ...appState,
             },
           },
-          excalidrawAPI: (api) => { excalidrawAPI = api; },
+          excalidrawAPI: function(api) {
+            excalidrawAPI = api;
+            // Zoom to fit on initial load
+            setTimeout(function() {
+              if (excalidrawAPI && excalidrawAPI.scrollToContent) {
+                excalidrawAPI.scrollToContent(undefined, { fitToViewport: true, viewportZoomFactor: 0.9 });
+              }
+            }, 100);
+          },
           UIOptions: {
             canvasActions: {
               export: { saveFileToDisk: true },
@@ -45,35 +142,82 @@
       );
 
       ReactDOM.createRoot(root).render(App);
+      showToolbar();
     }
 
+    // Copy as PNG button
+    document.getElementById("btn-copy-png").addEventListener("click", function() {
+      if (!excalidrawAPI) return;
+      var btn = this;
+      btn.textContent = "...";
+      var elems = excalidrawAPI.getSceneElements();
+      var appState = excalidrawAPI.getAppState();
+      ExcalidrawLib.exportToBlob({
+        elements: elems,
+        appState: { ...appState, exportWithDarkMode: isDarkMode },
+        files: excalidrawAPI.getFiles(),
+        getDimensions: function() { return { width: 1920, height: 1080, scale: 2 }; },
+      }).then(function(blob) {
+        return navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      }).then(function() {
+        btn.textContent = "Copied!";
+        setTimeout(function() { btn.textContent = "Copy PNG"; }, 1500);
+      }).catch(function() {
+        btn.textContent = "Failed";
+        setTimeout(function() { btn.textContent = "Copy PNG"; }, 1500);
+      });
+    });
+
+    // Dark mode toggle
+    document.getElementById("btn-dark-mode").addEventListener("click", function() {
+      isDarkMode = !isDarkMode;
+      this.textContent = isDarkMode ? "Light" : "Dark";
+      document.body.classList.toggle("dark-mode", isDarkMode);
+      if (excalidrawAPI) {
+        excalidrawAPI.updateScene({
+          appState: {
+            viewBackgroundColor: isDarkMode ? "#1e1e1e" : "#ffffff",
+            theme: isDarkMode ? "dark" : "light",
+          },
+        });
+      }
+    });
+
     // Listen for element data from the host
-    window.addEventListener("message", (event) => {
-      const data = event.data;
+    window.addEventListener("message", function(event) {
+      var data = event.data;
       if (!data) return;
 
       if (data.type === "excalidraw-elements" || data.elements) {
-        const elements = data.elements || data;
-        const appState = data.appState || {};
-        renderExcalidraw(Array.isArray(elements) ? elements : [], appState);
+        var elements = data.elements || data;
+        var appState = data.appState || {};
+        var elArray = Array.isArray(elements) ? elements : [];
+        renderExcalidraw(elArray, appState);
+        // Use stats from context if provided, otherwise compute from elements
+        var stats = (data.stats) || computeStats(elArray);
+        updateStatsBadge(stats);
       }
 
       // Support updating existing scene
       if (data.type === "update-scene" && excalidrawAPI) {
         excalidrawAPI.updateScene({ elements: data.elements });
+        var stats = computeStats(data.elements);
+        updateStatsBadge(stats);
       }
     });
 
     // Also check for elements embedded in the URL hash
     try {
-      const hash = window.location.hash.slice(1);
+      var hash = window.location.hash.slice(1);
       if (hash) {
-        const decoded = JSON.parse(decodeURIComponent(hash));
+        var decoded = JSON.parse(decodeURIComponent(hash));
         if (decoded.elements) {
           renderExcalidraw(decoded.elements, decoded.appState);
+          var stats = decoded.stats || computeStats(decoded.elements);
+          updateStatsBadge(stats);
         }
       }
-    } catch {
+    } catch(e) {
       // no embedded data
     }
   </script>

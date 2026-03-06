@@ -103,6 +103,8 @@ export interface ShapeOpts {
   link?: string | null;
   /** Arbitrary custom metadata stored on the element */
   customData?: Record<string, unknown> | null;
+  /** Icon preset name or raw emoji — prepended above the label */
+  icon?: string;
 }
 
 /** Options for connecting two elements */
@@ -191,8 +193,27 @@ export const ExcalidrawFileSchema = z.object({
 
 export type ExcalidrawFile = z.infer<typeof ExcalidrawFileSchema>;
 
+/** Theme preset names */
+export type ThemePreset = "default" | "sketch" | "blueprint" | "minimal";
+
+/** Theme definition — defaults applied to all shapes unless overridden per-node */
+export interface ThemeOpts {
+  fillStyle?: FillStyle;
+  roughness?: number;
+  strokeWidth?: number;
+  fontFamily?: FontFamily;
+  opacity?: number;
+}
+
 /** Output format options */
 export type OutputFormat = "excalidraw" | "url" | "png" | "svg";
+
+/** Diagram statistics computed from the element graph */
+export interface DiagramStats {
+  nodes: number;
+  edges: number;
+  groups: number;
+}
 
 /** Result from rendering a diagram */
 export interface RenderResult {
@@ -201,6 +222,9 @@ export interface RenderResult {
   filePath?: string;
   pngBase64?: string;
   svgString?: string;
+  warnings?: string[];
+  changeSummary?: string;
+  stats?: DiagramStats;
 }
 
 /** Render options */

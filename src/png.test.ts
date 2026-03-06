@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { readFile, unlink } from "node:fs/promises";
 import { Diagram } from "./sdk.js";
 import { buildRenderHTML, buildSvgHTML, renderPngLocal, renderSvgLocal } from "./png.js";
+import { compareSnapshot } from "./visual-test-helpers.js";
 
 describe("buildRenderHTML", () => {
   it("returns valid HTML with embedded elements", () => {
@@ -108,6 +109,68 @@ describe("PNG export via puppeteer", () => {
     expect(height).toBeGreaterThan(200);
     expect(width).toBeLessThan(10000);
     expect(height).toBeLessThan(10000);
+
+    await unlink(outPath).catch(() => {});
+  }, 60000);
+});
+
+describe("Visual regression tests", () => {
+  const outPath = "/tmp/drawmode-visual-test.png";
+
+  it("simple two-box diagram with arrow matches baseline", async () => {
+    const d = new Diagram();
+    const a = d.addBox("API Gateway", { row: 0, col: 0, color: "backend" });
+    const b = d.addBox("Database", { row: 1, col: 0, color: "database" });
+    d.connect(a, b, "queries");
+    const result = await d.render({ format: "excalidraw" });
+
+    const base64 = await renderPngLocal(result.json.elements, outPath);
+    expect(base64).not.toBeNull();
+
+    const cmp = await compareSnapshot(base64!, "two-box-arrow");
+    if (!cmp.baselineCreated) {
+      expect(cmp.match).toBe(true);
+    }
+
+    await unlink(outPath).catch(() => {});
+  }, 60000);
+
+  it("bidirectional edges do not overlap labels", async () => {
+    const d = new Diagram();
+    const a = d.addBox("Service A", { row: 0, col: 0, color: "backend" });
+    const b = d.addBox("Service B", { row: 1, col: 0, color: "frontend" });
+    d.connect(a, b, "requests");
+    d.connect(b, a, "responses");
+    const result = await d.render({ format: "excalidraw" });
+
+    const base64 = await renderPngLocal(result.json.elements, outPath);
+    expect(base64).not.toBeNull();
+
+    const cmp = await compareSnapshot(base64!, "bidirectional-edges");
+    if (!cmp.baselineCreated) {
+      expect(cmp.match).toBe(true);
+    }
+
+    await unlink(outPath).catch(() => {});
+  }, 60000);
+
+  it("diagram with groups matches baseline", async () => {
+    const d = new Diagram();
+    const api = d.addBox("API", { row: 0, col: 0, color: "backend" });
+    const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
+    const cache = d.addBox("Redis", { row: 1, col: 1, color: "cache" });
+    d.connect(api, db, "writes");
+    d.connect(api, cache, "reads");
+    d.addGroup("Data Layer", [db, cache]);
+    const result = await d.render({ format: "excalidraw" });
+
+    const base64 = await renderPngLocal(result.json.elements, outPath);
+    expect(base64).not.toBeNull();
+
+    const cmp = await compareSnapshot(base64!, "diagram-with-groups");
+    if (!cmp.baselineCreated) {
+      expect(cmp.match).toBe(true);
+    }
 
     await unlink(outPath).catch(() => {});
   }, 60000);

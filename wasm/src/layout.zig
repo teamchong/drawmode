@@ -71,40 +71,29 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
         c.gviz_set_node_attr(graph, node_ptr, "fixedsize", "true");
     }
 
-    // Create cluster subgraphs for groups (Graphviz keeps clusters non-overlapping)
+    // Create cluster subgraphs for groups (Graphviz keeps clusters non-overlapping).
+    // Two passes: first create top-level clusters, then nested ones (parent must exist first).
     var cluster_ptrs: [MAX_GROUPS]?*anyopaque = undefined;
+    // Pass 1: top-level groups (no parent)
     for (groups[0..group_count], 0..) |g, gi| {
-        // Graphviz requires cluster names to start with "cluster"
-        var cluster_name: [64]u8 = undefined;
-        const prefix = "cluster_";
-        @memcpy(cluster_name[0..prefix.len], prefix);
-        const idx_len = writeInt(cluster_name[prefix.len..], @intCast(gi));
-        cluster_name[prefix.len + idx_len] = 0;
-
-        const subg = c.gviz_add_subgraph(graph, @ptrCast(&cluster_name)) orelse {
+        if (g.parent_slice.len > 0) {
             cluster_ptrs[gi] = null;
             continue;
-        };
-        cluster_ptrs[gi] = subg;
-
-        // Set cluster label and margin (margin ensures padding for TS-side group rect)
-        const label_z = nullTerminate(g.label_slice) orelse continue;
-        c.gviz_set_graph_attr(subg, "label", label_z);
-        c.gviz_set_graph_attr(subg, "style", "dashed");
-        c.gviz_set_graph_attr(subg, "margin", "20");
-
-        // Add child nodes to the cluster subgraph
-        for (g.children_slices[0..g.child_count]) |child_id| {
-            // Find the node pointer for this child
-            for (nodes[0..node_count], 0..) |n, ni| {
-                if (std.mem.eql(u8, n.id_slice, child_id)) {
-                    if (node_ptrs[ni]) |np| {
-                        _ = c.gviz_subgraph_add_node(subg, np);
-                    }
-                    break;
-                }
+        }
+        cluster_ptrs[gi] = createCluster(graph, gi, g, &nodes, node_count, &node_ptrs);
+    }
+    // Pass 2: nested groups (have parent — create under parent cluster)
+    for (groups[0..group_count], 0..) |g, gi| {
+        if (g.parent_slice.len == 0) continue;
+        // Find parent cluster pointer
+        var parent_ptr: ?*anyopaque = graph;
+        for (groups[0..group_count], 0..) |pg, pgi| {
+            if (std.mem.eql(u8, pg.id_slice, g.parent_slice)) {
+                parent_ptr = cluster_ptrs[pgi] orelse graph;
+                break;
             }
         }
+        cluster_ptrs[gi] = createCluster(parent_ptr.?, gi, g, &nodes, node_count, &node_ptrs);
     }
 
     // Create edges (store pointers for reading label positions back)
@@ -269,6 +258,8 @@ const Node = struct {
     height: i32,
     row: ?i32,
     col: ?i32,
+    abs_x: ?i32,
+    abs_y: ?i32,
 };
 
 const Edge = struct {
@@ -280,9 +271,41 @@ const Edge = struct {
 const Group = struct {
     id_slice: []const u8,
     label_slice: []const u8,
+    parent_slice: []const u8, // "" if top-level
     children_slices: [MAX_GROUP_CHILDREN][]const u8,
     child_count: usize,
 };
+
+/// Create a Graphviz cluster subgraph under a parent graph/cluster.
+fn createCluster(parent: *anyopaque, gi: usize, g: Group, nodes: *[MAX_NODES]Node, node_count: usize, node_ptrs: *[MAX_NODES]?*anyopaque) ?*anyopaque {
+    // Graphviz requires cluster names to start with "cluster"
+    var cluster_name: [64]u8 = undefined;
+    const prefix = "cluster_";
+    @memcpy(cluster_name[0..prefix.len], prefix);
+    const idx_len = writeInt(cluster_name[prefix.len..], @intCast(gi));
+    cluster_name[prefix.len + idx_len] = 0;
+
+    const subg = c.gviz_add_subgraph(parent, @ptrCast(&cluster_name)) orelse return null;
+
+    // Set cluster label and margin (margin ensures padding for TS-side group rect)
+    const label_z = nullTerminate(g.label_slice) orelse return subg;
+    c.gviz_set_graph_attr(subg, "label", label_z);
+    c.gviz_set_graph_attr(subg, "style", "dashed");
+    c.gviz_set_graph_attr(subg, "margin", "20");
+
+    // Add child nodes to the cluster subgraph
+    for (g.children_slices[0..g.child_count]) |child_id| {
+        for (nodes[0..node_count], 0..) |n, ni| {
+            if (std.mem.eql(u8, n.id_slice, child_id)) {
+                if (node_ptrs[ni]) |np| {
+                    _ = c.gviz_subgraph_add_node(subg, np);
+                }
+                break;
+            }
+        }
+    }
+    return subg;
+}
 
 // ── Output: Extract Graphviz Layout Results ──
 
@@ -323,8 +346,16 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
         c.gviz_node_coord(n, &cx, &cy);
 
         // Convert to Excalidraw coordinates (Y-down, top-left corner)
-        const node_x = @as(i32, @intFromFloat(cx)) - @divTrunc(input_w, 2);
-        const node_y = @as(i32, @intFromFloat(y_max - cy)) - @divTrunc(input_h, 2);
+        // Use pinned absX/absY if the input node has them (fromFile re-render)
+        var node_x = @as(i32, @intFromFloat(cx)) - @divTrunc(input_w, 2);
+        var node_y = @as(i32, @intFromFloat(y_max - cy)) - @divTrunc(input_h, 2);
+        for (nodes[0..node_count]) |in_node| {
+            if (std.mem.eql(u8, in_node.id_slice, name_slice)) {
+                if (in_node.abs_x) |ax| node_x = ax;
+                if (in_node.abs_y) |ay| node_y = ay;
+                break;
+            }
+        }
 
         if (!first_node) w += copySlice(out[w..], ",");
         first_node = false;
@@ -355,7 +386,8 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
     var edge_info_count: usize = 0;
 
     for (edges[0..edge_count], 0..) |e, ei| {
-        const spline = findEdgeSpline(graph, e.from_slice, e.to_slice, y_max, nodes, node_count);
+        const ep = edge_ptrs[ei] orelse continue;
+        const spline = extractSplineFromEdge(ep, e.from_slice, e.to_slice, y_max, nodes, node_count);
         if (spline.point_count < 2) continue;
 
         var info = EdgeInfo{
@@ -369,27 +401,25 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
 
         // Read label position from Graphviz (computed natively during layout)
         if (info.has_label) {
-            if (edge_ptrs[ei]) |ep| {
-                var lx: f64 = 0;
-                var ly: f64 = 0;
-                if (c.gviz_edge_label_pos(ep, &lx, &ly) != 0) {
-                    // Graphviz Y-up → Excalidraw Y-down
-                    info.label_x = @intFromFloat(lx);
-                    info.label_y = @intFromFloat(y_max - ly);
-                } else {
-                    // Fallback: midpoint of longest segment
-                    var best_len: i32 = 0;
-                    var best_seg: usize = 0;
-                    var s: usize = 0;
-                    while (s + 1 < spline.point_count) : (s += 1) {
-                        const dx = absInt(spline.points_x[s + 1] - spline.points_x[s]);
-                        const dy = absInt(spline.points_y[s + 1] - spline.points_y[s]);
-                        const seg_len = dx + dy;
-                        if (seg_len > best_len) { best_len = seg_len; best_seg = s; }
-                    }
-                    info.label_x = @divTrunc(spline.points_x[best_seg] + spline.points_x[best_seg + 1], 2);
-                    info.label_y = @divTrunc(spline.points_y[best_seg] + spline.points_y[best_seg + 1], 2);
+            var lx: f64 = 0;
+            var ly: f64 = 0;
+            if (c.gviz_edge_label_pos(ep, &lx, &ly) != 0) {
+                // Graphviz Y-up → Excalidraw Y-down
+                info.label_x = @intFromFloat(lx);
+                info.label_y = @intFromFloat(y_max - ly);
+            } else {
+                // Fallback: midpoint of longest segment
+                var best_len: i32 = 0;
+                var best_seg: usize = 0;
+                var s: usize = 0;
+                while (s + 1 < spline.point_count) : (s += 1) {
+                    const dx = absInt(spline.points_x[s + 1] - spline.points_x[s]);
+                    const dy = absInt(spline.points_y[s + 1] - spline.points_y[s]);
+                    const seg_len = dx + dy;
+                    if (seg_len > best_len) { best_len = seg_len; best_seg = s; }
                 }
+                info.label_x = @divTrunc(spline.points_x[best_seg] + spline.points_x[best_seg + 1], 2);
+                info.label_y = @divTrunc(spline.points_y[best_seg] + spline.points_y[best_seg + 1], 2);
             }
         }
 
@@ -538,6 +568,83 @@ const SplineResult = struct {
     start_fixed_point: [2]f64,
     end_fixed_point: [2]f64,
 };
+
+/// Extract spline data directly from a Graphviz edge pointer (no search needed).
+/// This fixes multi-edge overlap: each edge pointer is unique even for parallel edges.
+fn extractSplineFromEdge(edge: *anyopaque, from_name: []const u8, to_name: []const u8, y_max: f64, nodes: *[MAX_NODES]Node, node_count: usize) SplineResult {
+    var result = SplineResult{
+        .points_x = undefined,
+        .points_y = undefined,
+        .point_count = 0,
+        .start_fixed_point = .{ 0.5, 0.5 },
+        .end_fixed_point = .{ 0.5, 0.5 },
+    };
+
+    var spline: GvizSpline = undefined;
+    if (c.gviz_edge_spline(edge, &spline) == 0) return result;
+
+    // Extract knot points from cubic bezier sequence (every 3rd point)
+    var i: usize = 0;
+    while (i < spline.point_count and result.point_count < MAX_SPLINE_POINTS) {
+        const pt = spline.points[i];
+        result.points_x[result.point_count] = @intFromFloat(pt.x);
+        result.points_y[result.point_count] = @intFromFloat(y_max - pt.y);
+        result.point_count += 1;
+        i += 3;
+    }
+    // Also capture the last bezier knot if not already included
+    if (spline.point_count > 0 and (spline.point_count - 1) % 3 != 0) {
+        const last_pt = spline.points[spline.point_count - 1];
+        if (result.point_count < MAX_SPLINE_POINTS) {
+            result.points_x[result.point_count] = @intFromFloat(last_pt.x);
+            result.points_y[result.point_count] = @intFromFloat(y_max - last_pt.y);
+            result.point_count += 1;
+        }
+    }
+
+    // Compute fixedPoints using sp/ep (arrow tip positions on node boundary)
+    if (result.point_count >= 2) {
+        const fix_start_x: f64 = if (spline.has_start_point != 0) spline.start_point.x else @floatFromInt(result.points_x[0]);
+        const fix_start_y: f64 = if (spline.has_start_point != 0) (y_max - spline.start_point.y) else @floatFromInt(result.points_y[0]);
+        const fix_end_x: f64 = if (spline.has_end_point != 0) spline.end_point.x else @floatFromInt(result.points_x[result.point_count - 1]);
+        const fix_end_y: f64 = if (spline.has_end_point != 0) (y_max - spline.end_point.y) else @floatFromInt(result.points_y[result.point_count - 1]);
+
+        // Source node fixedPoint
+        const tail = c.gviz_edge_tail(edge);
+        if (tail != null) {
+            for (nodes[0..node_count]) |sn| {
+                if (std.mem.eql(u8, sn.id_slice, from_name)) {
+                    var scx: f64 = 0;
+                    var scy: f64 = 0;
+                    c.gviz_node_coord(tail, &scx, &scy);
+                    const snx = scx - @as(f64, @floatFromInt(sn.width)) / 2.0;
+                    const sny = (y_max - scy) - @as(f64, @floatFromInt(sn.height)) / 2.0;
+                    result.start_fixed_point[0] = clamp01((fix_start_x - snx) / @as(f64, @floatFromInt(sn.width)));
+                    result.start_fixed_point[1] = clamp01((fix_start_y - sny) / @as(f64, @floatFromInt(sn.height)));
+                    break;
+                }
+            }
+        }
+        // Target node fixedPoint
+        const head = c.gviz_edge_head(edge);
+        if (head != null) {
+            for (nodes[0..node_count]) |tn| {
+                if (std.mem.eql(u8, tn.id_slice, to_name)) {
+                    var tcx: f64 = 0;
+                    var tcy: f64 = 0;
+                    c.gviz_node_coord(head, &tcx, &tcy);
+                    const tnx = tcx - @as(f64, @floatFromInt(tn.width)) / 2.0;
+                    const tny = (y_max - tcy) - @as(f64, @floatFromInt(tn.height)) / 2.0;
+                    result.end_fixed_point[0] = clamp01((fix_end_x - tnx) / @as(f64, @floatFromInt(tn.width)));
+                    result.end_fixed_point[1] = clamp01((fix_end_y - tny) / @as(f64, @floatFromInt(tn.height)));
+                    break;
+                }
+            }
+        }
+    }
+
+    return result;
+}
 
 fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8, y_max: f64, nodes: *[MAX_NODES]Node, node_count: usize) SplineResult {
     var result = SplineResult{
@@ -702,7 +809,7 @@ fn parseNodes(json: []const u8, out_nodes: *[MAX_NODES]Node) !usize {
     while (pos < json.len and json[pos] != '{') : (pos += 1) {}
     while (pos < json.len and count < MAX_NODES) {
         if (json[pos] == '{') {
-            var node = Node{ .id_slice = &.{}, .width = 180, .height = 80, .row = null, .col = null };
+            var node = Node{ .id_slice = &.{}, .width = 180, .height = 80, .row = null, .col = null, .abs_x = null, .abs_y = null };
             const obj_end = findMatchingBrace(json[pos..]) + pos;
             const obj = json[pos..obj_end];
             node.id_slice = extractStringField(obj, "id") orelse &.{};
@@ -710,6 +817,8 @@ fn parseNodes(json: []const u8, out_nodes: *[MAX_NODES]Node) !usize {
             node.height = extractIntField(obj, "height") orelse 80;
             node.row = extractIntField(obj, "row");
             node.col = extractIntField(obj, "col");
+            node.abs_x = extractIntField(obj, "absX");
+            node.abs_y = extractIntField(obj, "absY");
             out_nodes[count] = node;
             count += 1;
             pos = obj_end;
@@ -753,6 +862,7 @@ fn parseGroups(json: []const u8, out_groups: *[MAX_GROUPS]Group) !usize {
             var group = Group{
                 .id_slice = extractStringField(obj, "id") orelse &.{},
                 .label_slice = extractStringField(obj, "label") orelse &.{},
+                .parent_slice = extractStringField(obj, "parent") orelse &.{},
                 .children_slices = undefined,
                 .child_count = 0,
             };

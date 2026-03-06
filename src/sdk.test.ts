@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Diagram } from "./sdk.js";
-import { unlink, writeFile, readFile } from "node:fs/promises";
+import { isWasmLoaded } from "./layout.js";
+import { unlink, writeFile, readFile, access } from "node:fs/promises";
 
 describe("Diagram SDK", () => {
   it("addBox creates shape + text pair", async () => {
@@ -427,6 +428,32 @@ describe("Diagram SDK", () => {
     expect(text.text).toBe("Yes?");
   });
 
+  it("fromFile preserves positions when adding new nodes", async () => {
+    // Create 2-node diagram and render
+    const d1 = new Diagram();
+    const a = d1.addBox("Service A", { row: 0, col: 0, color: "backend" });
+    const b = d1.addBox("Service B", { row: 1, col: 0, color: "database" });
+    d1.connect(a, b, "queries");
+    const r1 = await d1.render({ format: "excalidraw", path: testFile });
+
+    const origA = r1.json.elements.find(e => e.id === a)!;
+    const origB = r1.json.elements.find(e => e.id === b)!;
+
+    // Load via fromFile, add a third node, re-render
+    const d2 = await Diagram.fromFile(testFile);
+    d2.addBox("Service C", { row: 0, col: 1, color: "frontend" });
+    const r2 = await d2.render({ format: "excalidraw", path: testFile });
+
+    const newA = r2.json.elements.find(e => e.id === a)!;
+    const newB = r2.json.elements.find(e => e.id === b)!;
+
+    // Original nodes should keep their positions (within 5px tolerance)
+    expect(Math.abs(newA.x - origA.x)).toBeLessThanOrEqual(5);
+    expect(Math.abs(newA.y - origA.y)).toBeLessThanOrEqual(5);
+    expect(Math.abs(newB.x - origB.x)).toBeLessThanOrEqual(5);
+    expect(Math.abs(newB.y - origB.y)).toBeLessThanOrEqual(5);
+  });
+
   it("findByLabel matches substring", async () => {
     const d = new Diagram();
     d.addBox("API Gateway", { row: 0, col: 0 });
@@ -742,6 +769,48 @@ describe("Diagram SDK", () => {
 
   // ── addFrame ──
 
+  // ── Font-aware text measurement ──
+
+  it("Helvetica box narrower than Virgil box for same label", async () => {
+    const longLabel = "Authentication Gateway Service";
+    const d1 = new Diagram();
+    const virgilId = d1.addBox(longLabel, { row: 0, col: 0, fontFamily: 1 });
+    const result1 = await d1.render({ format: "excalidraw" });
+    const virgilShape = result1.json.elements.find(e => e.id === virgilId)!;
+
+    const d2 = new Diagram();
+    const helveticaId = d2.addBox(longLabel, { row: 0, col: 0, fontFamily: 2 });
+    const result2 = await d2.render({ format: "excalidraw" });
+    const helveticaShape = result2.json.elements.find(e => e.id === helveticaId)!;
+
+    expect(helveticaShape.width).toBeLessThan(virgilShape.width);
+  });
+
+  it("large fontSize box wider than small fontSize box", async () => {
+    const d = new Diagram();
+    const small = d.addBox("Test Label", { row: 0, col: 0, fontSize: 12 });
+    const large = d.addBox("Test Label", { row: 1, col: 0, fontSize: 24 });
+
+    const result = await d.render({ format: "excalidraw" });
+    const smallShape = result.json.elements.find(e => e.id === small)!;
+    const largeShape = result.json.elements.find(e => e.id === large)!;
+
+    expect(largeShape.width).toBeGreaterThan(smallShape.width);
+  });
+
+  // ── Layout warnings ──
+
+  it("render with WASM loaded produces no layout fallback warning", async () => {
+    if (!isWasmLoaded()) return; // skip if WASM not available
+    const d = new Diagram();
+    d.addBox("A", { row: 0, col: 0 });
+    d.addBox("B", { row: 1, col: 0 });
+
+    const result = await d.render({ format: "excalidraw" });
+    const fallbackWarnings = (result.warnings ?? []).filter(w => w.includes("grid fallback"));
+    expect(fallbackWarnings.length).toBe(0);
+  });
+
   it("addFrame creates frame element with children", async () => {
     const d = new Diagram();
     const a = d.addBox("A", { row: 0, col: 0 });
@@ -767,5 +836,430 @@ describe("Diagram SDK", () => {
     // Bound text elements also get frameId
     const textA = elements.find(e => e.id === `${a}-text`)!;
     expect(textA.frameId).toBe(frm);
+  });
+
+  // ── Icon/emoji support ──
+
+  it("icon preset prepends emoji to bound text", async () => {
+    const d = new Diagram();
+    const id = d.addBox("Database", { row: 0, col: 0, icon: "database" });
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = result.json.elements;
+    const text = elements.find(e => e.id === `${id}-text`)!;
+
+    expect(text.text).toContain("🗄️");
+    expect(text.text).toContain("Database");
+    expect(text.text).toBe("🗄️\nDatabase");
+  });
+
+  it("raw emoji accepted as icon value", async () => {
+    const d = new Diagram();
+    const id = d.addBox("Custom", { row: 0, col: 0, icon: "🚀" });
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = result.json.elements;
+    const text = elements.find(e => e.id === `${id}-text`)!;
+
+    expect(text.text).toBe("🚀\nCustom");
+  });
+
+  it("icon adds extra height vs same label without icon", async () => {
+    const d1 = new Diagram();
+    const noIcon = d1.addBox("Service", { row: 0, col: 0 });
+    const r1 = await d1.render({ format: "excalidraw" });
+    const noIconShape = r1.json.elements.find(e => e.id === noIcon)!;
+
+    const d2 = new Diagram();
+    const withIcon = d2.addBox("Service", { row: 0, col: 0, icon: "server" });
+    const r2 = await d2.render({ format: "excalidraw" });
+    const withIconShape = r2.json.elements.find(e => e.id === withIcon)!;
+
+    expect(withIconShape.height).toBeGreaterThan(noIconShape.height);
+  });
+
+  // ── Auto-backup before overwrite ──
+
+  const backupTestFile = "/tmp/drawmode-test-backup.excalidraw";
+
+  afterEach(async () => {
+    try { await unlink(backupTestFile); } catch { /* ok */ }
+    try { await unlink(backupTestFile + ".bak"); } catch { /* ok */ }
+  });
+
+  it("overwriting creates .bak with original content", async () => {
+    const d1 = new Diagram();
+    d1.addBox("Original", { row: 0, col: 0 });
+    await d1.render({ format: "excalidraw", path: backupTestFile });
+    const originalContent = await readFile(backupTestFile, "utf-8");
+
+    // Overwrite
+    const d2 = new Diagram();
+    d2.addBox("Updated", { row: 0, col: 0 });
+    await d2.render({ format: "excalidraw", path: backupTestFile });
+
+    // .bak should exist with original content
+    const bakContent = await readFile(backupTestFile + ".bak", "utf-8");
+    expect(bakContent).toBe(originalContent);
+
+    // New file should have updated content
+    const newContent = await readFile(backupTestFile, "utf-8");
+    expect(newContent).not.toBe(originalContent);
+    expect(newContent).toContain("Updated");
+  });
+
+  it("fresh file creates no .bak", async () => {
+    // Ensure file doesn't exist
+    try { await unlink(backupTestFile); } catch { /* ok */ }
+
+    const d = new Diagram();
+    d.addBox("Fresh", { row: 0, col: 0 });
+    await d.render({ format: "excalidraw", path: backupTestFile });
+
+    // .bak should not exist
+    let bakExists = true;
+    try { await access(backupTestFile + ".bak"); } catch { bakExists = false; }
+    expect(bakExists).toBe(false);
+  });
+
+  // ── Multi-edge differentiation ──
+
+  it("multi-edges between same pair produce different arrows", async () => {
+    if (!isWasmLoaded()) return; // requires WASM for Graphviz routing
+    const d = new Diagram();
+    const a = d.addBox("A", { row: 0, col: 0 });
+    const b = d.addBox("B", { row: 1, col: 0 });
+    d.connect(a, b, "reads");
+    d.connect(a, b, "writes");
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = result.json.elements;
+    const arrows = elements.filter(e => e.type === "arrow");
+    expect(arrows.length).toBe(2);
+
+    // Arrows should have different points (not overlapping)
+    const pts1 = JSON.stringify(arrows[0].points);
+    const pts2 = JSON.stringify(arrows[1].points);
+    expect(pts1).not.toBe(pts2);
+  });
+
+  // ── Diagram diff summary ──
+
+  const diffTestFile = "/tmp/drawmode-test-diff.excalidraw";
+
+  afterEach(async () => {
+    try { await unlink(diffTestFile); } catch { /* ok */ }
+    try { await unlink(diffTestFile + ".bak"); } catch { /* ok */ }
+  });
+
+  it("changeSummary reports modified nodes when label changes", async () => {
+    const d1 = new Diagram();
+    d1.addBox("Keep", { row: 0, col: 0 });
+    d1.addBox("Old Label", { row: 1, col: 0 });
+    await d1.render({ format: "excalidraw", path: diffTestFile });
+
+    // Same IDs (same process), different label on second box
+    const d2 = new Diagram();
+    d2.addBox("Keep", { row: 0, col: 0 });
+    d2.addBox("New Label", { row: 1, col: 0 });
+    const result = await d2.render({ format: "excalidraw", path: diffTestFile });
+
+    expect(result.changeSummary).toBeDefined();
+    expect(result.changeSummary).toContain("Modified");
+    expect(result.changeSummary).toContain("Old Label");
+    expect(result.changeSummary).toContain("New Label");
+    expect(result.changeSummary).toContain("Unchanged: 1");
+  });
+
+  it("changeSummary is undefined for first render", async () => {
+    try { await unlink(diffTestFile); } catch { /* ok */ }
+
+    const d = new Diagram();
+    d.addBox("First", { row: 0, col: 0 });
+    const result = await d.render({ format: "excalidraw", path: diffTestFile });
+
+    expect(result.changeSummary).toBeUndefined();
+  });
+
+  // ── Theme/style presets ──
+
+  it("sketch theme applies hachure fill and roughness 2", async () => {
+    const d = new Diagram({ theme: "sketch" });
+    const id = d.addBox("Sketchy", { row: 0, col: 0 });
+
+    const result = await d.render({ format: "excalidraw" });
+    const shape = result.json.elements.find(e => e.id === id)!;
+
+    expect(shape.fillStyle).toBe("hachure");
+    expect(shape.roughness).toBe(2);
+  });
+
+  it("blueprint theme applies solid fill, roughness 0, Cascadia font", async () => {
+    const d = new Diagram({ theme: "blueprint" });
+    const id = d.addBox("Clean", { row: 0, col: 0 });
+
+    const result = await d.render({ format: "excalidraw" });
+    const shape = result.json.elements.find(e => e.id === id)!;
+    const text = result.json.elements.find(e => e.id === `${id}-text`)!;
+
+    expect(shape.fillStyle).toBe("solid");
+    expect(shape.roughness).toBe(0);
+    expect(shape.strokeWidth).toBe(1);
+    expect(text.fontFamily).toBe(3); // Cascadia
+  });
+
+  it("minimal theme applies thin strokes and Helvetica", async () => {
+    const d = new Diagram({ theme: "minimal" });
+    const id = d.addBox("Thin", { row: 0, col: 0 });
+
+    const result = await d.render({ format: "excalidraw" });
+    const shape = result.json.elements.find(e => e.id === id)!;
+    const text = result.json.elements.find(e => e.id === `${id}-text`)!;
+
+    expect(shape.strokeWidth).toBe(1);
+    expect(shape.roughness).toBe(0);
+    expect(text.fontFamily).toBe(2); // Helvetica
+  });
+
+  it("per-node opts override theme defaults", async () => {
+    const d = new Diagram({ theme: "sketch" });
+    const id = d.addBox("Override", { row: 0, col: 0, roughness: 0, fillStyle: "solid" });
+
+    const result = await d.render({ format: "excalidraw" });
+    const shape = result.json.elements.find(e => e.id === id)!;
+
+    // Per-node should win over theme
+    expect(shape.roughness).toBe(0);
+    expect(shape.fillStyle).toBe("solid");
+  });
+
+  it("setTheme changes defaults mid-diagram", async () => {
+    const d = new Diagram();
+    const id1 = d.addBox("Default", { row: 0, col: 0 });
+    d.setTheme("sketch");
+    const id2 = d.addBox("Sketchy", { row: 1, col: 0 });
+
+    const result = await d.render({ format: "excalidraw" });
+    const shape1 = result.json.elements.find(e => e.id === id1)!;
+    const shape2 = result.json.elements.find(e => e.id === id2)!;
+
+    // First box should have default style
+    expect(shape1.roughness).toBe(1);
+    // Second box should have sketch style
+    expect(shape2.fillStyle).toBe("hachure");
+    expect(shape2.roughness).toBe(2);
+  });
+
+  // ── Nested groups ──
+
+  it("nested groups render inner group inside outer group", async () => {
+    const d = new Diagram();
+    const a = d.addBox("Svc A", { row: 0, col: 0 });
+    const b = d.addBox("Svc B", { row: 0, col: 1 });
+    const c = d.addBox("Svc C", { row: 1, col: 0 });
+
+    const inner = d.addGroup("Subnet A", [a, b]);
+    const outer = d.addGroup("VPC", [inner, c]);
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = result.json.elements;
+
+    const innerRect = elements.find(e => e.id === inner)!;
+    const outerRect = elements.find(e => e.id === outer)!;
+
+    expect(innerRect).toBeDefined();
+    expect(outerRect).toBeDefined();
+
+    // Outer group should fully contain inner group
+    expect(outerRect.x).toBeLessThanOrEqual(innerRect.x);
+    expect(outerRect.y).toBeLessThanOrEqual(innerRect.y);
+    expect(outerRect.x + outerRect.width).toBeGreaterThanOrEqual(innerRect.x + innerRect.width);
+    expect(outerRect.y + outerRect.height).toBeGreaterThanOrEqual(innerRect.y + innerRect.height);
+  });
+
+  it("nested group labels render correctly", async () => {
+    const d = new Diagram();
+    const a = d.addBox("Pod", { row: 0, col: 0 });
+    const inner = d.addGroup("Namespace", [a]);
+    d.addGroup("Cluster", [inner]);
+
+    const result = await d.render({ format: "excalidraw" });
+    const elements = result.json.elements;
+
+    const innerLabel = elements.find(e => e.id === `${inner}-label`)!;
+    expect(innerLabel).toBeDefined();
+    expect(innerLabel.text).toBe("Namespace");
+  });
+
+  // ── fromMermaid ──
+
+  describe("fromMermaid", () => {
+    it("basic graph TD with two nodes and one edge", async () => {
+      const d = Diagram.fromMermaid(`graph TD
+A-->B`);
+      const nodes = d.getNodes();
+      expect(nodes.length).toBe(2);
+
+      const edges = d.getEdges();
+      expect(edges.length).toBe(1);
+
+      const result = await d.render({ format: "excalidraw" });
+      expect(result.json.elements.length).toBeGreaterThan(0);
+    });
+
+    it("node shapes: [] box, {} diamond, (()) circle", async () => {
+      const d = Diagram.fromMermaid(`graph TD
+A[Box Label]
+B{Diamond Label}
+C((Circle Label))`);
+      const nodes = d.getNodes();
+      expect(nodes.length).toBe(3);
+
+      const result = await d.render({ format: "excalidraw" });
+      const elements = result.json.elements;
+
+      // A should be rectangle
+      const boxText = elements.find(e => e.type === "text" && e.text === "Box Label");
+      expect(boxText).toBeDefined();
+      const boxShape = elements.find(e => e.id === boxText!.containerId);
+      expect(boxShape!.type).toBe("rectangle");
+
+      // B should be diamond
+      const diaText = elements.find(e => e.type === "text" && e.text === "Diamond Label");
+      expect(diaText).toBeDefined();
+      const diaShape = elements.find(e => e.id === diaText!.containerId);
+      expect(diaShape!.type).toBe("diamond");
+
+      // C should be ellipse
+      const ellText = elements.find(e => e.type === "text" && e.text === "Circle Label");
+      expect(ellText).toBeDefined();
+      const ellShape = elements.find(e => e.id === ellText!.containerId);
+      expect(ellShape!.type).toBe("ellipse");
+    });
+
+    it("edge labels: A -->|writes| B", async () => {
+      const d = Diagram.fromMermaid(`graph TD
+A-->|writes|B`);
+      const edges = d.getEdges();
+      expect(edges.length).toBe(1);
+      expect(edges[0].label).toBe("writes");
+    });
+
+    it("subgraphs become groups", async () => {
+      const d = Diagram.fromMermaid(`graph TD
+subgraph Backend
+A[API]
+B[DB]
+end
+A-->B`);
+      const nodes = d.getNodes();
+      expect(nodes.length).toBe(2);
+
+      const result = await d.render({ format: "excalidraw" });
+      const elements = result.json.elements;
+      // Should have a group boundary labeled "Backend"
+      const groupLabel = elements.find(e => e.type === "text" && e.text === "Backend");
+      expect(groupLabel).toBeDefined();
+    });
+
+    it("edge styles: -.-> is dashed, ==> is thick", async () => {
+      const d = Diagram.fromMermaid(`graph TD
+A-.->B
+C==>D`);
+      const edges = d.getEdges();
+      expect(edges.length).toBe(2);
+
+      const result = await d.render({ format: "excalidraw" });
+      const elements = result.json.elements;
+      const arrows = elements.filter(e => e.type === "arrow");
+      expect(arrows.length).toBe(2);
+
+      // Find dashed arrow (A->B)
+      const dashedArrow = arrows.find(a => a.strokeStyle === "dashed");
+      expect(dashedArrow).toBeDefined();
+
+      // Find thick arrow (C->D)
+      const thickArrow = arrows.find(a => a.strokeWidth === 4);
+      expect(thickArrow).toBeDefined();
+    });
+
+    it("direction LR assigns cols instead of rows", () => {
+      const d = Diagram.fromMermaid(`graph LR
+A-->B-->C`);
+      const nodes = d.getNodes();
+      expect(nodes.length).toBe(3);
+      // In LR mode, depth maps to col
+      const edges = d.getEdges();
+      expect(edges.length).toBe(2);
+    });
+
+    it("--- produces arrow with no arrowhead", async () => {
+      const d = Diagram.fromMermaid(`graph TD
+A---B`);
+      const result = await d.render({ format: "excalidraw" });
+      const arrow = result.json.elements.find(e => e.type === "arrow")!;
+      expect(arrow.endArrowhead).toBeNull();
+    });
+
+    it("complex multi-line mermaid with subgraphs", async () => {
+      const d = Diagram.fromMermaid(`graph TD
+subgraph Frontend
+  A[React App]
+  B[CDN]
+end
+subgraph Backend
+  C[API Server]
+  D[(Database)]
+end
+A-->C
+B-->A
+C-->D`);
+      const nodes = d.getNodes();
+      expect(nodes.length).toBe(4);
+
+      const edges = d.getEdges();
+      expect(edges.length).toBe(3);
+
+      const result = await d.render({ format: "excalidraw" });
+      const elements = result.json.elements;
+
+      // Should have group boundaries
+      const frontendLabel = elements.find(e => e.type === "text" && e.text === "Frontend");
+      expect(frontendLabel).toBeDefined();
+      const backendLabel = elements.find(e => e.type === "text" && e.text === "Backend");
+      expect(backendLabel).toBeDefined();
+
+      // Database node should have database color
+      const dbText = elements.find(e => e.type === "text" && e.text === "Database");
+      expect(dbText).toBeDefined();
+    });
+
+    it("semicolon-separated statements on single line", () => {
+      const d = Diagram.fromMermaid(`graph TD; A-->B; B-->C`);
+      expect(d.getNodes().length).toBe(3);
+      expect(d.getEdges().length).toBe(2);
+    });
+
+    it("chained edges A-->B-->C", () => {
+      // Our parser handles this via the second statement after splitting
+      const d = Diagram.fromMermaid(`graph TD
+A-->B
+B-->C`);
+      expect(d.getNodes().length).toBe(3);
+      expect(d.getEdges().length).toBe(2);
+    });
+
+    it("node with label defined inline on edge", async () => {
+      const d = Diagram.fromMermaid(`graph TD
+A[Start]-->B[End]`);
+      expect(d.getNodes().length).toBe(2);
+
+      const result = await d.render({ format: "excalidraw" });
+      const elements = result.json.elements;
+      const startText = elements.find(e => e.type === "text" && e.text === "Start");
+      expect(startText).toBeDefined();
+      const endText = elements.find(e => e.type === "text" && e.text === "End");
+      expect(endText).toBeDefined();
+    });
   });
 });

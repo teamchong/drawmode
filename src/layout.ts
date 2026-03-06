@@ -177,7 +177,7 @@ function callWasm(
 export async function layoutGraphWasm(
   nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number; type?: string }[],
   edges: { from: string; to: string; label?: string }[],
-  groups?: { id: string; label: string; children: string[] }[],
+  groups?: { id: string; label: string; children: string[]; parent?: string }[],
 ): Promise<WasmLayoutResult | null> {
   if (!wasmInstance) return null;
 
@@ -188,13 +188,15 @@ export async function layoutGraphWasm(
       height: n.height,
       row: n.row ?? null,
       col: n.col ?? null,
+      absX: n.absX ?? null,
+      absY: n.absY ?? null,
     })),
   );
   const edgesJson = JSON.stringify(
     edges.map(e => ({ from: e.from, to: e.to, label: e.label ?? "" })),
   );
   const groupsJson = JSON.stringify(
-    (groups ?? []).map(g => ({ id: g.id, label: g.label, children: g.children })),
+    (groups ?? []).map(g => ({ id: g.id, label: g.label, children: g.children, parent: g.parent ?? "" })),
   );
 
   wasmInstance.resetHeap();

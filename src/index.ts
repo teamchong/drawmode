@@ -134,11 +134,35 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
         parts.push({ type: "text" as const, text: result.url });
       }
 
+      // Add stats summary so users know what was generated
+      if (result.stats) {
+        const { nodes, edges, groups } = result.stats;
+        const statParts = [`${nodes} node${nodes !== 1 ? "s" : ""}`, `${edges} edge${edges !== 1 ? "s" : ""}`];
+        if (groups > 0) statParts.push(`${groups} group${groups !== 1 ? "s" : ""}`);
+        parts.push({ type: "text" as const, text: statParts.join(", ") });
+      }
+
+      // Surface change summary when overwriting
+      if (result.changeSummary) {
+        parts.push({ type: "text" as const, text: result.changeSummary });
+      }
+
+      // Surface backup info when a backup was created
+      if (result.filePath && result.changeSummary) {
+        parts.push({ type: "text" as const, text: `Backup saved to ${result.filePath}.bak` });
+      }
+
+      // Surface layout/validation warnings
+      if (result.warnings?.length) {
+        parts.push({ type: "text" as const, text: result.warnings.map(w => `⚠ ${w}`).join("\n") });
+      }
+
       // MCP requires at least one content item
       if (parts.length === 0) {
         parts.push({ type: "text" as const, text: "Diagram generated successfully" });
       }
 
+      // Return structured content with interactive widget for all successful renders
       const elements = (result.json as { elements?: unknown[] }).elements ?? [];
       if (elements.length > 0) {
         return {
@@ -146,7 +170,11 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
           structuredContent: {
             type: "resource" as const,
             resource: { uri: "ui://widget", mimeType: "text/html" },
-            context: { elements, appState: { viewBackgroundColor: "#ffffff" } },
+            context: {
+              elements,
+              appState: { viewBackgroundColor: "#ffffff" },
+              stats: result.stats,
+            },
           },
         };
       }

@@ -189,8 +189,25 @@ void gvrender_set_style(GVJ_t *j, char **s) { (void)j;(void)s; }
 void gvrender_textspan(GVJ_t *j, pointf p, textspan_t *s) { (void)j;(void)p;(void)s; }
 void gvrender_usershape(GVJ_t *j, char *n, pointf *a, size_t s, bool f, char *iu, char *ip) { (void)j;(void)n;(void)a;(void)s;(void)f;(void)iu;(void)ip; }
 
-/* Text layout — returns false (no text measurement in WASM, layout uses defaults) */
-bool gvtextlayout(GVC_t *gvc, textspan_t *span, char **fp) { (void)gvc;(void)span;(void)fp; return false; }
+/* Text layout — fixed-width metrics matching SDK estimates so Graphviz
+ * sizes edge labels correctly and avoids overlapping placements. */
+bool gvtextlayout(GVC_t *gvc, textspan_t *span, char **fp) {
+    (void)gvc;
+    if (!span || !span->str || !span->font) return false;
+    double fontsize = span->font->size;
+    if (fontsize <= 0) fontsize = 14.0;
+    size_t len = strlen(span->str);
+    /* Match SDK: width ≈ len * 8, using fontsize * 0.6 per char */
+    span->size.x = (double)len * fontsize * 0.6;
+    if (span->size.x < 16.0) span->size.x = 16.0;
+    span->size.y = fontsize * 1.2;
+    span->yoffset_layout = fontsize;
+    span->yoffset_centerline = 0.1 * fontsize;
+    span->layout = NULL;
+    span->free_layout = NULL;
+    if (fp) *fp = NULL;
+    return true;
+}
 
 /* User shape sizing — returns zero point (no image loading) */
 point gvusershape_size(graph_t *g, char *name) { (void)g;(void)name; point p = {0,0}; return p; }
