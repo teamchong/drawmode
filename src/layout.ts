@@ -52,7 +52,7 @@ interface WasmLayoutExports {
   alloc: (size: number) => number;
   dealloc: (ptr: number, size: number) => void;
   resetHeap: () => void;
-  layoutGraph: (nodesPtr: number, nodesLen: number, edgesPtr: number, edgesLen: number, groupsPtr: number, groupsLen: number, outPtr: number, outCap: number) => number;
+  layoutGraph: (nodesPtr: number, nodesLen: number, edgesPtr: number, edgesLen: number, groupsPtr: number, groupsLen: number, outPtr: number, outCap: number, optsPtr: number, optsLen: number) => number;
   validate: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
   zlibCompress: (inPtr: number, inLen: number, outPtr: number, outCap: number) => number;
 }
@@ -178,6 +178,7 @@ export async function layoutGraphWasm(
   nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number; type?: string }[],
   edges: { from: string; to: string; label?: string }[],
   groups?: { id: string; label: string; children: string[]; parent?: string }[],
+  options?: { rankdir?: string },
 ): Promise<WasmLayoutResult | null> {
   if (!wasmInstance) return null;
 
@@ -199,20 +200,25 @@ export async function layoutGraphWasm(
     (groups ?? []).map(g => ({ id: g.id, label: g.label, children: g.children, parent: g.parent ?? "" })),
   );
 
+  const optsJson = JSON.stringify({ rankdir: options?.rankdir ?? "TB" });
+
   wasmInstance.resetHeap();
   const nodesBytes = new TextEncoder().encode(nodesJson);
   const edgesBytes = new TextEncoder().encode(edgesJson);
   const groupsBytes = new TextEncoder().encode(groupsJson);
+  const optsBytes = new TextEncoder().encode(optsJson);
   const outCap = 128 * 1024;
   const nodesPtr = writeToWasm(nodesBytes);
   const edgesPtr = writeToWasm(edgesBytes);
   const groupsPtr = writeToWasm(groupsBytes);
+  const optsPtr = writeToWasm(optsBytes);
   const outPtr = wasmInstance.alloc(outCap);
   const written = wasmInstance.layoutGraph(
     nodesPtr, nodesBytes.byteLength,
     edgesPtr, edgesBytes.byteLength,
     groupsPtr, groupsBytes.byteLength,
     outPtr, outCap,
+    optsPtr, optsBytes.byteLength,
   );
 
   if (written === 0) return null;

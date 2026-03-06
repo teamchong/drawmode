@@ -1262,4 +1262,147 @@ A[Start]-->B[End]`);
       expect(endText).toBeDefined();
     });
   });
+
+  describe("getNode", () => {
+    it("returns properties by ID", () => {
+      const d = new Diagram();
+      const id = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
+      const node = d.getNode(id);
+      expect(node).toBeDefined();
+      expect(node!.label).toBe("API Gateway");
+      expect(node!.type).toBe("rectangle");
+      expect(node!.row).toBe(0);
+      expect(node!.col).toBe(1);
+      expect(node!.width).toBeGreaterThan(0);
+    });
+
+    it("returns undefined for unknown ID", () => {
+      const d = new Diagram();
+      expect(d.getNode("nonexistent")).toBeUndefined();
+    });
+
+    it("works on fromFile-loaded diagram", async () => {
+      const tmpPath = "test-getnode.excalidraw";
+      const d1 = new Diagram();
+      d1.addBox("TestNode", { color: "database" });
+      await d1.render({ format: "excalidraw", path: tmpPath });
+
+      const d2 = await Diagram.fromFile(tmpPath);
+      const nodes = d2.getNodes();
+      expect(nodes.length).toBeGreaterThan(0);
+      const node = d2.getNode(nodes[0]);
+      expect(node).toBeDefined();
+      expect(node!.label).toBe("TestNode");
+
+      await unlink(tmpPath).catch(() => {});
+    });
+  });
+
+  describe("layout direction", () => {
+    it("defaults to TB (B below A)", async () => {
+      const d = new Diagram();
+      const a = d.addBox("A", { row: 0, col: 0 });
+      const b = d.addBox("B", { row: 1, col: 0 });
+      d.connect(a, b);
+      const result = await d.render({ format: "excalidraw" });
+      const elA = result.json.elements.find(e => e.id === a)!;
+      const elB = result.json.elements.find(e => e.id === b)!;
+      expect(elB.y).toBeGreaterThan(elA.y);
+    });
+
+    it("LR places nodes horizontally (B right of A)", async () => {
+      const d = new Diagram({ direction: "LR" });
+      const a = d.addBox("A", { row: 0, col: 0 });
+      const b = d.addBox("B", { row: 0, col: 1 });
+      d.connect(a, b);
+      const result = await d.render({ format: "excalidraw" });
+      const elA = result.json.elements.find(e => e.id === a)!;
+      const elB = result.json.elements.find(e => e.id === b)!;
+      expect(elB.x).toBeGreaterThan(elA.x);
+    });
+
+    it("setDirection works after construction", async () => {
+      const d = new Diagram();
+      d.setDirection("LR");
+      const a = d.addBox("A", { row: 0, col: 0 });
+      const b = d.addBox("B", { row: 0, col: 1 });
+      d.connect(a, b);
+      const result = await d.render({ format: "excalidraw" });
+      const elA = result.json.elements.find(e => e.id === a)!;
+      const elB = result.json.elements.find(e => e.id === b)!;
+      expect(elB.x).toBeGreaterThan(elA.x);
+    });
+
+    it("fromMermaid('graph LR') preserves direction", () => {
+      const d = Diagram.fromMermaid("graph LR\nA-->B");
+      const nodes = d.getNodes();
+      expect(nodes.length).toBe(2);
+      // Verify direction was set by checking node positions
+      const nodeA = d.getNode(nodes[0])!;
+      const nodeB = d.getNode(nodes[1])!;
+      // In LR, depth goes to col
+      expect(nodeB.col).toBeGreaterThan(nodeA.col!);
+    });
+  });
+
+  describe("sequence diagram", () => {
+    it("creates actor boxes + lifelines + message arrows", async () => {
+      const d = new Diagram({ type: "sequence" });
+      const alice = d.addActor("Alice");
+      const bob = d.addActor("Bob");
+      d.message(alice, bob, "Hello");
+
+      const result = await d.render({ format: "excalidraw" });
+      const elements = result.json.elements;
+
+      // Actor boxes
+      const aliceBox = elements.find(e => e.id === alice);
+      expect(aliceBox).toBeDefined();
+      expect(aliceBox!.type).toBe("rectangle");
+      const bobBox = elements.find(e => e.id === bob);
+      expect(bobBox).toBeDefined();
+
+      // Lifelines (dashed lines)
+      const lifelines = elements.filter(e => e.type === "line" && e.strokeStyle === "dashed");
+      expect(lifelines.length).toBe(2);
+
+      // Message arrow
+      const arrows = elements.filter(e => e.type === "arrow");
+      expect(arrows.length).toBe(1);
+    });
+
+    it("self-message creates 4-point loop arrow", async () => {
+      const d = new Diagram({ type: "sequence" });
+      const alice = d.addActor("Alice");
+      d.message(alice, alice, "Self");
+
+      const result = await d.render({ format: "excalidraw" });
+      const arrows = result.json.elements.filter(e => e.type === "arrow");
+      expect(arrows.length).toBe(1);
+      expect(arrows[0].points!.length).toBe(4);
+    });
+
+    it("message labels create text elements", async () => {
+      const d = new Diagram({ type: "sequence" });
+      const alice = d.addActor("Alice");
+      const bob = d.addActor("Bob");
+      d.message(alice, bob, "Hello World");
+
+      const result = await d.render({ format: "excalidraw" });
+      const labels = result.json.elements.filter(e => e.type === "text" && e.text === "Hello World");
+      expect(labels.length).toBe(1);
+    });
+
+    it("dashed message style is respected", async () => {
+      const d = new Diagram({ type: "sequence" });
+      const alice = d.addActor("Alice");
+      const bob = d.addActor("Bob");
+      d.message(alice, bob, "Reply", { style: "dashed" });
+
+      const result = await d.render({ format: "excalidraw" });
+      const arrows = result.json.elements.filter(e => e.type === "arrow");
+      expect(arrows.length).toBe(1);
+      expect(arrows[0].strokeStyle).toBe("dashed");
+    });
+  });
 });

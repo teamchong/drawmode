@@ -52,12 +52,18 @@ interface ConnectOpts {
   customData?: Record<string, unknown> | null; // arbitrary metadata
 }
 
+type LayoutDirection = "TB" | "LR" | "RL" | "BT";
+type DiagramType = "architecture" | "sequence";
+
 declare class Diagram {
-  /** Create a diagram. Optional theme sets defaults for all shapes. */
-  constructor(opts?: { theme?: "default" | "sketch" | "blueprint" | "minimal" });
+  /** Create a diagram. Optional theme, direction, and type. */
+  constructor(opts?: { theme?: "default" | "sketch" | "blueprint" | "minimal"; direction?: LayoutDirection; type?: DiagramType });
 
   /** Set a theme preset. "sketch"=hachure/rough, "blueprint"=clean/monospace, "minimal"=thin/helvetica */
   setTheme(theme: "default" | "sketch" | "blueprint" | "minimal"): void;
+
+  /** Set layout direction: TB (top-bottom), LR (left-right), RL (right-left), BT (bottom-top). */
+  setDirection(direction: LayoutDirection): void;
 
   /** Add a rectangle. Returns element ID. */
   addBox(label: string, opts?: ShapeOpts): string;
@@ -109,6 +115,16 @@ declare class Diagram {
 
   /** Get all edges. */
   getEdges(): Array<{ from: string; to: string; label?: string }>;
+
+  /** Get a node's properties by ID. Returns undefined if not found. */
+  getNode(id: string): { label: string; type: string; width: number; height: number;
+    backgroundColor?: string; strokeColor?: string; row?: number; col?: number } | undefined;
+
+  /** Add an actor to a sequence diagram. Returns the actor ID. */
+  addActor(label: string, opts?: ShapeOpts): string;
+
+  /** Add a message between actors in a sequence diagram. */
+  message(from: string, to: string, label?: string, opts?: ConnectOpts): void;
 
   /** Update a node's properties. */
   updateNode(id: string, opts: Partial<ShapeOpts> & { label?: string }): void;

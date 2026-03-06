@@ -35,13 +35,16 @@ export fn layoutGraph(
     groups_len: usize,
     out_ptr: [*]u8,
     out_cap: usize,
+    opts_ptr: [*]const u8,
+    opts_len: usize,
 ) usize {
     const nodes_slice = nodes_ptr[0..nodes_len];
     const edges_slice = edges_ptr[0..edges_len];
     const groups_slice = groups_ptr[0..groups_len];
+    const opts_slice = opts_ptr[0..opts_len];
     const out_slice = out_ptr[0..out_cap];
 
-    return layout.layoutGraph(nodes_slice, edges_slice, groups_slice, out_slice) catch 0;
+    return layout.layoutGraph(nodes_slice, edges_slice, groups_slice, opts_slice, out_slice) catch 0;
 }
 
 /// Route arrows: calculate arrow endpoints and elbow points.

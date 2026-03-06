@@ -11,7 +11,7 @@ const util = @import("util.zig");
 /// Output JSON:
 ///   {"nodes":[{"id":"box_1","x":340,"y":100},...],
 ///    "edges":[{"from":"box_1","to":"box_2","points":[[x,y],[x,y],...]},...]}
-pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: []const u8, out: []u8) !usize {
+pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: []const u8, opts_json: []const u8, out: []u8) !usize {
     var nodes: [MAX_NODES]Node = undefined;
     var node_count: usize = 0;
     node_count = parseNodes(nodes_json, &nodes) catch return 0;
@@ -29,8 +29,13 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
     // Build graph programmatically via cgraph API (no DOT parser needed)
     const graph = c.gviz_graph_new("G") orelse return 0;
 
-    // Set graph attributes
-    c.gviz_set_graph_attr(graph, "rankdir", "TB");
+    // Set graph attributes — parse rankdir from options
+    var rankdir_buf: [8]u8 = undefined;
+    const rankdir_slice = extractStringField(opts_json, "rankdir") orelse "TB";
+    const rd_len = @min(rankdir_slice.len, rankdir_buf.len - 1);
+    @memcpy(rankdir_buf[0..rd_len], rankdir_slice[0..rd_len]);
+    rankdir_buf[rd_len] = 0;
+    c.gviz_set_graph_attr(graph, "rankdir", @ptrCast(&rankdir_buf));
     c.gviz_set_graph_attr(graph, "splines", "ortho");
     c.gviz_set_graph_attr(graph, "nodesep", "1.5");
     c.gviz_set_graph_attr(graph, "ranksep", "1.2");

@@ -55,8 +55,16 @@ function buildExcalidrawHTML(elements: unknown[], renderScript: string): string 
 export function buildRenderHTML(elements: unknown[]): string {
   return buildExcalidrawHTML(elements, `
     const svgStr = new XMLSerializer().serializeToString(svg);
+    const blob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
+      URL.revokeObjectURL(url);
+      if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+        window.__ERROR = "SVG rendered with zero dimensions";
+        window.__DONE = true;
+        return;
+      }
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth * 2;
       canvas.height = img.naturalHeight * 2;
@@ -67,10 +75,11 @@ export function buildRenderHTML(elements: unknown[]): string {
       window.__DONE = true;
     };
     img.onerror = () => {
+      URL.revokeObjectURL(url);
       window.__ERROR = "Failed to load SVG as image";
       window.__DONE = true;
     };
-    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgStr);
+    img.src = url;
   `);
 }
 

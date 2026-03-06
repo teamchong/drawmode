@@ -193,6 +193,12 @@ export const ExcalidrawFileSchema = z.object({
 
 export type ExcalidrawFile = z.infer<typeof ExcalidrawFileSchema>;
 
+/** Layout direction for Graphviz rankdir */
+export type LayoutDirection = "TB" | "LR" | "RL" | "BT";
+
+/** Diagram type */
+export type DiagramType = "architecture" | "sequence";
+
 /** Theme preset names */
 export type ThemePreset = "default" | "sketch" | "blueprint" | "minimal";
 

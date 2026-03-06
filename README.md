@@ -196,6 +196,8 @@ return d.render({ path: "diagram.excalidraw" });
 
 ## Architecture
 
+![Architecture](architecture.svg)
+
 ### Project Structure
 
 ```
@@ -242,7 +244,7 @@ Falls back to Zig WASM grid → TS grid if Graphviz is unavailable.
 pnpm install              # Install dependencies
 pnpm build                # Build TS + WASM
 pnpm dev                  # Dev server (HTTP mode)
-pnpm test                 # Run tests (70 tests)
+pnpm test                 # Run tests
 
 cd wasm && zig build       # Build WASM module only
 cd wasm && zig build test  # Run Zig tests

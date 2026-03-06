@@ -8,7 +8,7 @@ import type {
   GraphNode, GraphEdge, FillStyle, StrokeStyle, FontFamily,
   Arrowhead, TextAlign, VerticalAlign, ColorPair,
   ExcalidrawElement, ExcalidrawFile,
-  ThemePreset, ThemeOpts,
+  ThemePreset, ThemeOpts, LayoutDirection, DiagramType,
 } from "./types.js";
 import { COLOR_PALETTE, ExcalidrawFileSchema } from "./types.js";
 import {
@@ -190,16 +190,31 @@ export class Diagram {
   private passthrough: ExcalidrawElement[] = [];
   private idCounter = 0;
   private themeDefaults: ThemeOpts = {};
+  private direction: LayoutDirection = "TB";
+  private diagramType: DiagramType = "architecture";
+  private sequenceActors: { id: string; label: string; index: number; opts?: ShapeOpts }[] = [];
+  private sequenceMessages: { from: string; to: string; label?: string; index: number; opts?: ConnectOpts }[] = [];
 
-  constructor(opts?: { theme?: ThemePreset }) {
+  constructor(opts?: { theme?: ThemePreset; direction?: LayoutDirection; type?: DiagramType }) {
     if (opts?.theme) {
       this.themeDefaults = THEME_PRESETS[opts.theme] ?? {};
+    }
+    if (opts?.direction) {
+      this.direction = opts.direction;
+    }
+    if (opts?.type) {
+      this.diagramType = opts.type;
     }
   }
 
   /** Set a theme preset that applies defaults to all subsequently added shapes. */
   setTheme(theme: ThemePreset): void {
     this.themeDefaults = THEME_PRESETS[theme] ?? {};
+  }
+
+  /** Set the layout direction (rankdir). */
+  setDirection(direction: LayoutDirection): void {
+    this.direction = direction;
   }
 
   private nextId(prefix: string): string {
@@ -530,11 +545,12 @@ export class Diagram {
     const lines = syntax.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("%%"));
 
     // Parse direction — may be on its own line or before a semicolon
-    let direction: "TD" | "LR" = "TD";
+    let direction: LayoutDirection = "TB";
     if (lines[0]) {
       const dirMatch = lines[0].match(/^(?:graph|flowchart)\s+(TD|TB|LR|RL)\b/i);
       if (dirMatch) {
-        direction = (dirMatch[1].toUpperCase() === "LR" || dirMatch[1].toUpperCase() === "RL") ? "LR" : "TD";
+        const raw = dirMatch[1].toUpperCase();
+        direction = (raw === "TD" ? "TB" : raw) as LayoutDirection;
         // Remove the direction prefix; keep anything after the semicolon
         const afterDir = lines[0].replace(/^(?:graph|flowchart)\s+(?:TD|TB|LR|RL)\s*;?\s*/i, "");
         if (afterDir) {
@@ -739,7 +755,7 @@ export class Diagram {
         if (!nodeId) return;
         const node = (d as unknown as { nodes: Map<string, GraphNode> }).nodes.get(nodeId);
         if (!node) return;
-        if (direction === "LR") {
+        if (direction === "LR" || direction === "RL") {
           node.col = depth;
           node.row = idx;
         } else {
@@ -749,6 +765,7 @@ export class Diagram {
       });
     }
 
+    d.setDirection(direction);
     return d;
   }
 
@@ -773,6 +790,23 @@ export class Diagram {
   /** Get all edges. */
   getEdges(): Array<{ from: string; to: string; label?: string }> {
     return this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
+  }
+
+  /** Get a node's properties by ID. Returns undefined if not found. */
+  getNode(id: string): { label: string; type: string; width: number; height: number;
+    backgroundColor?: string; strokeColor?: string; row?: number; col?: number } | undefined {
+    const node = this.nodes.get(id);
+    if (!node) return undefined;
+    return {
+      label: node.label,
+      type: node.type,
+      width: node.width,
+      height: node.height,
+      backgroundColor: node.opts?.backgroundColor ?? node.color.background,
+      strokeColor: node.opts?.strokeColor ?? node.color.stroke,
+      row: node.row,
+      col: node.col,
+    };
   }
 
   /** Update a node's properties. */
@@ -825,6 +859,18 @@ export class Diagram {
       removed = true;
       return false;
     });
+  }
+
+  /** Add an actor to a sequence diagram. Returns the actor ID. */
+  addActor(label: string, opts?: ShapeOpts): string {
+    const id = this.nextId("actor");
+    this.sequenceActors.push({ id, label, index: this.sequenceActors.length, opts });
+    return id;
+  }
+
+  /** Add a message between actors in a sequence diagram. */
+  message(from: string, to: string, label?: string, opts?: ConnectOpts): void {
+    this.sequenceMessages.push({ from, to, label, index: this.sequenceMessages.length, opts });
   }
 
   /** Update an existing edge's properties. Optional matchLabel disambiguates multi-edges. */
@@ -950,6 +996,10 @@ export class Diagram {
 
   /** Convert the graph to Excalidraw elements with layout. */
   private async buildElements(warnings?: string[]): Promise<ExcalidrawElement[]> {
+    if (this.diagramType === "sequence") {
+      return this.buildSequenceElements();
+    }
+
     const elements: ExcalidrawElement[] = [];
     const { positioned, edgeRoutes, groupBounds } = await this.layoutNodes(warnings);
 
@@ -1265,25 +1315,75 @@ export class Diagram {
       }
     }
 
-    // Arrow label collision avoidance: shift overlapping labels vertically
+    // Arrow label collision avoidance: shift overlapping labels
+    // Labels are free-standing text (containerId=null), identified by "arrlbl_" prefix
     const labelElements = elements.filter(
-      el => el.type === "text" && el.containerId && arrowIds.includes(el.containerId),
+      el => el.type === "text" && el.id.startsWith("arrlbl_"),
     );
-    for (let i = 1; i < labelElements.length; i++) {
-      const cur = labelElements[i];
-      const curW = cur.width;
-      const curH = cur.height;
-      for (let j = 0; j < i; j++) {
-        const prev = labelElements[j];
-        // Check overlap
-        if (
-          cur.x < prev.x + prev.width &&
-          cur.x + curW > prev.x &&
-          cur.y < prev.y + prev.height &&
-          cur.y + curH > prev.y
-        ) {
-          // Shift current label below the overlapping one
-          cur.y = prev.y + prev.height + 4;
+
+    // Collect arrow segments for label-vs-arrow collision checks
+    const arrowSegments: { x1: number; y1: number; x2: number; y2: number }[] = [];
+    for (const el of elements) {
+      if (el.type === "arrow" && el.points && el.points.length >= 2) {
+        for (let s = 0; s < el.points.length - 1; s++) {
+          arrowSegments.push({
+            x1: el.x + el.points[s][0], y1: el.y + el.points[s][1],
+            x2: el.x + el.points[s + 1][0], y2: el.y + el.points[s + 1][1],
+          });
+        }
+      }
+    }
+
+    // Check if a rectangle overlaps any arrow segment (approximate: check if segment passes through rect)
+    const overlapsArrow = (lx: number, ly: number, lw: number, lh: number): boolean => {
+      for (const seg of arrowSegments) {
+        // Quick AABB check: does the segment's bounding box overlap the label rect?
+        const segMinX = Math.min(seg.x1, seg.x2), segMaxX = Math.max(seg.x1, seg.x2);
+        const segMinY = Math.min(seg.y1, seg.y2), segMaxY = Math.max(seg.y1, seg.y2);
+        if (segMaxX < lx || segMinX > lx + lw || segMaxY < ly || segMinY > ly + lh) continue;
+        // Segment passes through label bounding box — count as collision
+        return true;
+      }
+      return false;
+    };
+
+    // Check if a rectangle overlaps any other label
+    const overlapsLabel = (idx: number, lx: number, ly: number, lw: number, lh: number): boolean => {
+      for (let j = 0; j < labelElements.length; j++) {
+        if (j === idx) continue;
+        const other = labelElements[j];
+        if (lx < other.x + other.width && lx + lw > other.x &&
+            ly < other.y + other.height && ly + lh > other.y) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // Multi-pass: shift labels that overlap other labels or arrows
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = 0; i < labelElements.length; i++) {
+        const cur = labelElements[i];
+        const curW = cur.width;
+        const curH = cur.height;
+        if (!overlapsLabel(i, cur.x, cur.y, curW, curH) && !overlapsArrow(cur.x, cur.y, curW, curH)) continue;
+
+        // Try shifting: above, below, left, right
+        const offsets = [
+          { dx: 0, dy: -(curH + 8) },   // above
+          { dx: 0, dy: curH + 8 },       // below
+          { dx: -(curW + 8), dy: 0 },    // left
+          { dx: curW + 8, dy: 0 },       // right
+          { dx: 0, dy: -(curH + 20) },   // further above
+          { dx: 0, dy: curH + 20 },      // further below
+        ];
+        for (const { dx, dy } of offsets) {
+          const nx = cur.x + dx, ny = cur.y + dy;
+          if (!overlapsLabel(i, nx, ny, curW, curH) && !overlapsArrow(nx, ny, curW, curH)) {
+            cur.x = nx;
+            cur.y = ny;
+            break;
+          }
         }
       }
     }
@@ -1454,6 +1554,187 @@ export class Diagram {
     return elements;
   }
 
+  /** Build elements for a sequence diagram (formula layout, no Graphviz). */
+  private buildSequenceElements(): ExcalidrawElement[] {
+    const SEQ_ACTOR_SPACING = 220;
+    const SEQ_ACTOR_WIDTH = 160;
+    const SEQ_ACTOR_HEIGHT = 60;
+    const SEQ_MSG_START_Y = 160;
+    const SEQ_MSG_SPACING = 60;
+    const LIFELINE_EXTRA = 40; // extra space below last message
+
+    const elements: ExcalidrawElement[] = [];
+
+    // Build actor position map
+    const actorX = new Map<string, number>();
+    for (const actor of this.sequenceActors) {
+      const x = BASE_X + actor.index * SEQ_ACTOR_SPACING;
+      actorX.set(actor.id, x);
+
+      // Actor box
+      const textId = `${actor.id}-text`;
+      elements.push({
+        id: actor.id,
+        type: "rectangle",
+        x, y: BASE_Y,
+        width: SEQ_ACTOR_WIDTH, height: SEQ_ACTOR_HEIGHT,
+        backgroundColor: actor.opts?.backgroundColor ?? COLOR_PALETTE[actor.opts?.color ?? "backend"].background,
+        strokeColor: actor.opts?.strokeColor ?? COLOR_PALETTE[actor.opts?.color ?? "backend"].stroke,
+        fillStyle: "solid", strokeWidth: 2, roughness: 1, opacity: 100,
+        angle: 0, strokeStyle: "solid",
+        roundness: { type: 3 },
+        boundElements: [{ type: "text", id: textId }],
+        groupIds: [], frameId: null, isDeleted: false,
+        updated: Date.now(), locked: false, link: null,
+        seed: randSeed(), version: 1, versionNonce: randSeed(),
+      });
+
+      // Actor label
+      const ff: FontFamily = 1;
+      const measured = measureText(actor.label, 16, ff);
+      elements.push({
+        id: textId,
+        type: "text",
+        x: x + (SEQ_ACTOR_WIDTH - measured.width) / 2,
+        y: BASE_Y + (SEQ_ACTOR_HEIGHT - measured.height) / 2,
+        width: measured.width, height: measured.height,
+        text: actor.label, fontSize: 16, fontFamily: ff,
+        lineHeight: getLineHeight(ff), textAlign: "center" as TextAlign,
+        verticalAlign: "middle" as VerticalAlign,
+        containerId: actor.id, originalText: actor.label, autoResize: true,
+        strokeColor: COLOR_PALETTE[actor.opts?.color ?? "backend"].stroke,
+        backgroundColor: "transparent", fillStyle: "solid",
+        strokeWidth: 1, roughness: 0, opacity: 100, angle: 0,
+        groupIds: [], frameId: null, isDeleted: false,
+        boundElements: null, updated: Date.now(), locked: false, link: null,
+        seed: randSeed(), version: 1, versionNonce: randSeed(),
+      });
+    }
+
+    // Lifeline length depends on message count
+    const lifelineEndY = SEQ_MSG_START_Y + this.sequenceMessages.length * SEQ_MSG_SPACING + LIFELINE_EXTRA;
+
+    // Dashed lifelines
+    for (const actor of this.sequenceActors) {
+      const x = actorX.get(actor.id)!;
+      const centerX = x + SEQ_ACTOR_WIDTH / 2;
+      const startY = BASE_Y + SEQ_ACTOR_HEIGHT;
+      const lineId = `${actor.id}-lifeline`;
+      elements.push({
+        id: lineId,
+        type: "line",
+        x: centerX, y: startY,
+        width: 0, height: lifelineEndY - startY,
+        points: [[0, 0], [0, lifelineEndY - startY]],
+        strokeColor: "#868e96",
+        backgroundColor: "transparent", fillStyle: "solid",
+        strokeWidth: 2, strokeStyle: "dashed", roughness: 0, opacity: 100,
+        angle: 0, roundness: null,
+        startBinding: null, endBinding: null,
+        startArrowhead: null, endArrowhead: null,
+        groupIds: [], frameId: null, isDeleted: false,
+        boundElements: null, updated: Date.now(), locked: false, link: null,
+        seed: randSeed(), version: 1, versionNonce: randSeed(),
+      });
+    }
+
+    // Message arrows
+    for (const msg of this.sequenceMessages) {
+      const y = SEQ_MSG_START_Y + msg.index * SEQ_MSG_SPACING;
+      const fromX = actorX.get(msg.from);
+      const toX = actorX.get(msg.to);
+      if (fromX === undefined || toX === undefined) continue;
+
+      const fromCenterX = fromX + SEQ_ACTOR_WIDTH / 2;
+      const toCenterX = toX + SEQ_ACTOR_WIDTH / 2;
+      const arrowId = this.nextId("seq_arr");
+
+      const isSelf = msg.from === msg.to;
+      const style: StrokeStyle = msg.opts?.style ?? "solid";
+      const endArrowhead: Arrowhead = msg.opts?.endArrowhead ?? "arrow";
+      const startArrowhead: Arrowhead = msg.opts?.startArrowhead ?? null;
+
+      if (isSelf) {
+        // Self-message: rectangular loop on the right side
+        const loopWidth = 40;
+        const loopHeight = 30;
+        elements.push({
+          id: arrowId,
+          type: "arrow",
+          x: fromCenterX, y,
+          width: loopWidth, height: loopHeight,
+          points: [[0, 0], [loopWidth, 0], [loopWidth, loopHeight], [0, loopHeight]],
+          strokeColor: msg.opts?.strokeColor ?? "#1e1e1e",
+          backgroundColor: "transparent", fillStyle: "solid",
+          strokeWidth: msg.opts?.strokeWidth ?? 2,
+          strokeStyle: style, roughness: 0, opacity: msg.opts?.opacity ?? 100,
+          angle: 0, roundness: null,
+          startBinding: null, endBinding: null,
+          startArrowhead, endArrowhead,
+          elbowed: false,
+          groupIds: [], frameId: null, isDeleted: false,
+          boundElements: null, updated: Date.now(), locked: false, link: null,
+          seed: randSeed(), version: 1, versionNonce: randSeed(),
+        });
+      } else {
+        const dx = toCenterX - fromCenterX;
+        elements.push({
+          id: arrowId,
+          type: "arrow",
+          x: fromCenterX, y,
+          width: Math.abs(dx), height: 0,
+          points: [[0, 0], [dx, 0]],
+          strokeColor: msg.opts?.strokeColor ?? "#1e1e1e",
+          backgroundColor: "transparent", fillStyle: "solid",
+          strokeWidth: msg.opts?.strokeWidth ?? 2,
+          strokeStyle: style, roughness: 0, opacity: msg.opts?.opacity ?? 100,
+          angle: 0, roundness: null,
+          startBinding: null, endBinding: null,
+          startArrowhead, endArrowhead,
+          elbowed: false,
+          groupIds: [], frameId: null, isDeleted: false,
+          boundElements: null, updated: Date.now(), locked: false, link: null,
+          seed: randSeed(), version: 1, versionNonce: randSeed(),
+        });
+      }
+
+      // Message label as free-standing text
+      if (msg.label) {
+        const labelId = `${arrowId}-label`;
+        const ff: FontFamily = 1;
+        const labelSize = measureText(msg.label, 14, ff);
+        let labelX: number;
+        let labelY: number;
+
+        if (isSelf) {
+          labelX = fromCenterX + 45;
+          labelY = y + 2;
+        } else {
+          labelX = (fromCenterX + toCenterX) / 2 - labelSize.width / 2;
+          labelY = y - labelSize.height - 4;
+        }
+
+        elements.push({
+          id: labelId,
+          type: "text",
+          x: labelX, y: labelY,
+          width: labelSize.width, height: labelSize.height,
+          text: msg.label, fontSize: 14, fontFamily: ff,
+          lineHeight: getLineHeight(ff), textAlign: "center" as TextAlign,
+          verticalAlign: "top" as VerticalAlign,
+          containerId: null, originalText: msg.label, autoResize: true,
+          strokeColor: "#1e1e1e", backgroundColor: "transparent",
+          fillStyle: "solid", strokeWidth: 1, roughness: 0, opacity: 100,
+          angle: 0, groupIds: [], frameId: null, isDeleted: false,
+          boundElements: null, updated: Date.now(), locked: false, link: null,
+          seed: randSeed(), version: 1, versionNonce: randSeed(),
+        });
+      }
+    }
+
+    return elements;
+  }
+
   /** Assign x,y positions to all nodes. Priority: WASM Graphviz → TS grid. */
   private async layoutNodes(warnings?: string[]): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] }> {
     // Try WASM Graphviz layout (async)
@@ -1493,7 +1774,7 @@ export class Diagram {
       return { id, label: g.label, children: nodeChildren, parent };
     });
 
-    const result = await layoutGraphWasm(wasmNodes, wasmEdges, wasmGroups.length > 0 ? wasmGroups : undefined);
+    const result = await layoutGraphWasm(wasmNodes, wasmEdges, wasmGroups.length > 0 ? wasmGroups : undefined, { rankdir: this.direction });
     if (!result) return null;
 
     return { positioned: this.applyPositions(result.nodes), edgeRoutes: result.edgeRoutes, groupBounds: result.groupBounds };
@@ -1544,10 +1825,12 @@ export class Diagram {
       const row = node.row ?? autoRow;
       const col = node.col ?? autoCol;
 
+      // For LR/RL directions, swap row/col spacing
+      const isHorizontal = this.direction === "LR" || this.direction === "RL";
       result.set(node.id, {
         ...node,
-        x: node.absX ?? (BASE_X + col * COL_SPACING),
-        y: node.absY ?? (BASE_Y + row * ROW_SPACING),
+        x: node.absX ?? (BASE_X + col * (isHorizontal ? COL_SPACING : COL_SPACING)),
+        y: node.absY ?? (BASE_Y + row * (isHorizontal ? COL_SPACING : ROW_SPACING)),
       });
 
       if (node.row === undefined && node.col === undefined) {
