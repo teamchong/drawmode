@@ -70,6 +70,6 @@ declare class Diagram {
   removeEdge(from: string, to: string, label?: string): void;
 
   /** Always return this. Pass format as array for multi-output e.g. ["excalidraw", "svg"]. */
-  render(opts?: { format?: "excalidraw" | "url" | "png" | "svg" | ("excalidraw" | "url" | "png" | "svg")[]; path?: string }): Promise<{ json: object; url?: string; filePath?: string; filePaths?: string[]; pngBase64?: string }>;
+  render(opts?: { format?: "excalidraw" | "url" | "png" | "svg" | ("excalidraw" | "url" | "png" | "svg")[]; path?: string }): Promise<{ json: object; url?: string; filePath?: string; filePaths?: string[]; pngBase64?: string; svgString?: string }>;
 }
 `;
