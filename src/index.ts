@@ -45,9 +45,6 @@ function registerHandlers(server: McpServer): void {
     "draw",
     `Generate or edit an Excalidraw architecture diagram by writing TypeScript code.
 
-You have access to the \`Diagram\` class. Create a new diagram, add shapes, connect them, and return the render result.
-
-TypeScript types available:
 ${SDK_TYPES}
 
 Example — new diagram:
@@ -62,44 +59,15 @@ d.addGroup("Data Layer", [db, cache]);
 return d.render({ format: "url" });
 \`\`\`
 
-Example — custom styling:
-\`\`\`typescript
-const d = new Diagram();
-d.addBox("Sketch Style", { fillStyle: "hachure", roughness: 2 });
-d.addBox("Clean Style", { fillStyle: "solid", roughness: 0, opacity: 80 });
-d.connect(a, b, "flow", { startArrowhead: "dot", endArrowhead: "triangle" });
-return d.render();
-\`\`\`
-
-Example — iterate on existing diagram (read the .drawmode.ts sidecar and modify):
-\`\`\`typescript
-// Read diagram.drawmode.ts, then modify and re-render:
-const d = new Diagram();
-const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
-const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
-const cache = d.addBox("Redis", { row: 1, col: 1, color: "cache" }); // added
-d.connect(api, db, "queries");
-d.connect(api, cache, "reads");
-return d.render({ path: "diagram.excalidraw" });
-\`\`\`
-
-Example — edit existing diagram (use fromFile when no .drawmode.ts sidecar exists):
+Example — edit existing diagram:
 \`\`\`typescript
 const d = await Diagram.fromFile("diagram.excalidraw");
-const ids = d.findByLabel("Old Service");
-if (ids.length > 0) d.updateNode(ids[0], { label: "New Service", color: "ai" });
+d.updateNode(d.findByLabel("Old Service")[0], { label: "New Service", color: "ai" });
 d.removeNode(d.findByLabel("Deprecated")[0]);
 return d.render({ path: "diagram.excalidraw" });
 \`\`\`
 
-Prefer editing the .drawmode.ts source over fromFile() when a sidecar exists.
-
-Grid layout: row 0 is top, col 0 is left. Spacing: 280px between columns, 220px between rows. Elements auto-position if row/col omitted.
-Use x/y for absolute pixel positioning (bypasses grid).
-Labels support \\n for line breaks — e.g. addBox("Master DO\\n(Single Writer)").
-Edge labels support labelPosition: "start" | "middle" (default) | "end" in ConnectOpts.
-Multi-format: pass format as an array for multiple outputs — e.g. render({ format: ["excalidraw", "svg"] }).
-A .drawmode.ts sidecar file is always written alongside any file output for future iteration.`,
+Labels support \\n for line breaks. A .drawmode.ts sidecar is always written alongside output — prefer editing it over fromFile() when available.`,
     {
       code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
       format: z.union([

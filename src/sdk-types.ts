@@ -7,9 +7,6 @@ type FillStyle = "solid" | "hachure" | "cross-hatch" | "zigzag";
 type StrokeStyle = "solid" | "dashed" | "dotted";
 type FontFamily = 1 | 2 | 3;  // Virgil / Helvetica / Cascadia
 type Arrowhead = null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";
-type TextAlign = "left" | "center" | "right";
-type VerticalAlign = "top" | "middle";
-
 type ColorPreset =
   | "frontend" | "backend" | "database" | "storage" | "ai" | "external" | "orchestration" | "queue" | "cache" | "users"
   | "aws-compute" | "aws-storage" | "aws-database" | "aws-network" | "aws-security" | "aws-ml"
@@ -18,136 +15,61 @@ type ColorPreset =
   | "k8s-pod" | "k8s-service" | "k8s-ingress" | "k8s-volume";
 
 interface ShapeOpts {
-  row?: number; col?: number;
+  row?: number; col?: number;          // grid position (280px cols, 220px rows)
   color?: ColorPreset;
   width?: number; height?: number;
-  x?: number; y?: number;               // absolute positioning (bypasses grid)
-  strokeColor?: string;                  // hex override
-  backgroundColor?: string;             // hex override
-  fillStyle?: FillStyle;                 // default "solid"
-  strokeWidth?: number;                  // default 2
-  strokeStyle?: StrokeStyle;             // default "solid"
-  roughness?: number;                    // 0=architect, 1=artist, 2=cartoonist
-  opacity?: number;                      // 0-100
-  roundness?: { type: number } | null;
-  fontSize?: number;                     // default 16
-  fontFamily?: FontFamily;               // default 1
-  textAlign?: TextAlign;
-  verticalAlign?: VerticalAlign;
-  link?: string | null;                  // hyperlink URL
-  customData?: Record<string, unknown> | null; // arbitrary metadata
-  icon?: string;  // Preset: "database","cloud","lock","server","docker","lambda","api","queue","cache","user","k8s" or raw emoji
+  x?: number; y?: number;              // absolute position (bypasses grid)
+  strokeColor?: string; backgroundColor?: string;  // hex overrides
+  fillStyle?: FillStyle; strokeWidth?: number; strokeStyle?: StrokeStyle;
+  roughness?: number; opacity?: number; roundness?: { type: number } | null;
+  fontSize?: number; fontFamily?: FontFamily;
+  textAlign?: "left" | "center" | "right"; verticalAlign?: "top" | "middle";
+  link?: string | null; customData?: Record<string, unknown> | null;
+  icon?: string;  // "database","cloud","lock","server","docker","lambda","api","queue","cache","user","k8s" or emoji
 }
 
 interface ConnectOpts {
-  style?: StrokeStyle;
-  strokeColor?: string;
-  strokeWidth?: number;
-  roughness?: number;
-  opacity?: number;
-  startArrowhead?: Arrowhead;            // default null
-  endArrowhead?: Arrowhead;              // default "arrow"
-  elbowed?: boolean;                     // default true
-  labelFontSize?: number;
-  labelPosition?: "start" | "middle" | "end";  // where to place the edge label (default "middle")
-  customData?: Record<string, unknown> | null; // arbitrary metadata
+  style?: StrokeStyle; strokeColor?: string; strokeWidth?: number;
+  roughness?: number; opacity?: number;
+  startArrowhead?: Arrowhead; endArrowhead?: Arrowhead;  // default: null / "arrow"
+  elbowed?: boolean; labelFontSize?: number;
+  labelPosition?: "start" | "middle" | "end";
+  customData?: Record<string, unknown> | null;
 }
 
-type LayoutDirection = "TB" | "LR" | "RL" | "BT";
-type DiagramType = "architecture" | "sequence";
-
 declare class Diagram {
-  /** Create a diagram. Optional theme, direction, and type. */
-  constructor(opts?: { theme?: "default" | "sketch" | "blueprint" | "minimal"; direction?: LayoutDirection; type?: DiagramType });
-
-  /** Set a theme preset. "sketch"=hachure/rough, "blueprint"=clean/monospace, "minimal"=thin/helvetica */
+  constructor(opts?: { theme?: "default" | "sketch" | "blueprint" | "minimal"; direction?: "TB" | "LR" | "RL" | "BT"; type?: "architecture" | "sequence" });
   setTheme(theme: "default" | "sketch" | "blueprint" | "minimal"): void;
+  setDirection(direction: "TB" | "LR" | "RL" | "BT"): void;
 
-  /** Set layout direction: TB (top-bottom), LR (left-right), RL (right-left), BT (bottom-top). */
-  setDirection(direction: LayoutDirection): void;
-
-  /** Add a rectangle. Returns element ID. */
   addBox(label: string, opts?: ShapeOpts): string;
-
-  /** Add an ellipse. Returns element ID. */
   addEllipse(label: string, opts?: ShapeOpts): string;
-
-  /** Add a diamond shape (for flowchart decisions). Returns element ID. */
   addDiamond(label: string, opts?: ShapeOpts): string;
-
-  /** Add standalone text (no container). Returns element ID. */
-  addText(text: string, opts?: {
-    x?: number; y?: number;
-    fontSize?: number; fontFamily?: FontFamily;
-    color?: ColorPreset; strokeColor?: string;
-  }): string;
-
-  /** Add a line element. Returns element ID. */
-  addLine(points: [number, number][], opts?: {
-    strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle;
-  }): string;
-
-  /** Group elements with a dashed boundary. Returns group ID. */
-  addGroup(label: string, children: string[], opts?: {
-    padding?: number;          // pixels around children (default 30)
-    strokeColor?: string;      // hex color for boundary
-    strokeStyle?: StrokeStyle; // default "dashed"
-    opacity?: number;          // 0-100 (default 60)
-  }): string;
-
-  /** Add a native Excalidraw frame container. Returns frame ID. */
+  addText(text: string, opts?: { x?: number; y?: number; fontSize?: number; fontFamily?: FontFamily; color?: ColorPreset; strokeColor?: string }): string;
+  addLine(points: [number, number][], opts?: { strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle }): string;
+  addGroup(label: string, children: string[], opts?: { padding?: number; strokeColor?: string; strokeStyle?: StrokeStyle; opacity?: number }): string;
   addFrame(name: string, children: string[]): string;
-
-  /** Remove a group container. Children are kept. */
   removeGroup(id: string): void;
-
-  /** Remove a frame container. Children are kept. */
   removeFrame(id: string): void;
 
-  /** Connect two elements with an arrow. */
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
 
-  /** Load existing .excalidraw file for editing. */
   static fromFile(path: string): Promise<Diagram>;
-
-  /** Import a Mermaid graph definition. Supports graph TD/LR, nodes, edges, subgraphs. */
   static fromMermaid(syntax: string): Diagram;
-
-  /** Find node IDs by label match. Substring by default, exact with opts. */
   findByLabel(label: string, opts?: { exact?: boolean }): string[];
-
-  /** Get all node IDs. */
   getNodes(): string[];
-
-  /** Get all edges. */
   getEdges(): Array<{ from: string; to: string; label?: string }>;
+  getNode(id: string): { label: string; type: string; width: number; height: number; backgroundColor?: string; strokeColor?: string; row?: number; col?: number } | undefined;
 
-  /** Get a node's properties by ID. Returns undefined if not found. */
-  getNode(id: string): { label: string; type: string; width: number; height: number;
-    backgroundColor?: string; strokeColor?: string; row?: number; col?: number } | undefined;
-
-  /** Add an actor to a sequence diagram. Returns the actor ID. */
   addActor(label: string, opts?: ShapeOpts): string;
-
-  /** Add a message between actors in a sequence diagram. */
   message(from: string, to: string, label?: string, opts?: ConnectOpts): void;
 
-  /** Update a node's properties. */
   updateNode(id: string, opts: Partial<ShapeOpts> & { label?: string }): void;
-
-  /** Update an existing edge's properties. Optional matchLabel disambiguates multi-edges. */
   updateEdge(from: string, to: string, update: Partial<ConnectOpts> & { label?: string }, matchLabel?: string): void;
-
-  /** Remove a node and its connected edges. */
   removeNode(id: string): void;
-
-  /** Remove an edge between two nodes. Optional label disambiguates multi-edges. */
   removeEdge(from: string, to: string, label?: string): void;
 
-  /** Render the diagram. Always return this from your code. Pass format as array for multi-output. */
-  render(opts?: {
-    format?: "excalidraw" | "url" | "png" | "svg" | ("excalidraw" | "url" | "png" | "svg")[];
-    path?: string;
-  }): Promise<{ json: object; url?: string; filePath?: string; filePaths?: string[]; pngBase64?: string }>;
+  /** Always return this. Pass format as array for multi-output e.g. ["excalidraw", "svg"]. */
+  render(opts?: { format?: "excalidraw" | "url" | "png" | "svg" | ("excalidraw" | "url" | "png" | "svg")[]; path?: string }): Promise<{ json: object; url?: string; filePath?: string; filePaths?: string[]; pngBase64?: string }>;
 }
 `;
