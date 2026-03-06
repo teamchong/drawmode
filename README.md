@@ -236,14 +236,9 @@ drawmode/
 - **Cluster subgraphs** — groups rendered as Graphviz clusters
 - **Rank constraints** — nodes with same `row` value share a rank
 
-Falls back to a TypeScript grid layout if WASM is unavailable.
-
 ### Zig WASM Module (`drawmode.wasm`)
 
-Graphviz C is statically linked into a single Zig WASM binary that handles layout, edge routing, and validation:
-
-- **Layout** — Graphviz `dot` Sugiyama algorithm with crossing minimization and orthogonal edge routing
-- **Validation** — bound text elements, no duplicate IDs, arrow endpoints on shape edges, no overlapping elements
+Graphviz C is statically linked into a single Zig WASM binary that handles layout, edge routing, and validation.
 
 ## Development
 

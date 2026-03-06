@@ -30,7 +30,7 @@ drawmode/
 ├── wasm/                    # Zig WASM module
 │   ├── src/
 │   │   ├── main.zig         # WASM exports (alloc, resetHeap, layoutGraph, routeArrows, validate)
-│   │   ├── layout.zig       # Graphviz layout (C lib statically linked) + grid fallback
+│   │   ├── layout.zig       # Graphviz layout (C lib statically linked)
 │   │   ├── arrows.zig       # Arrow routing (unused — Graphviz handles routing)
 │   │   ├── validate.zig     # Structural validation
 │   │   └── util.zig         # Shared utilities
@@ -51,10 +51,6 @@ The primary layout engine is Graphviz — the C library is statically linked int
 - **Cluster subgraphs**: Groups rendered as Graphviz clusters for proper containment
 - **`rank=same`**: Nodes with same `row` value share a rank in the layout
 - **Coordinate conversion**: Graphviz points (Y-up) → Excalidraw pixels (Y-down)
-
-### Fallback
-
-Falls back to a TypeScript grid layout if WASM is unavailable.
 
 ## Zig WASM Module (`drawmode.wasm`)
 
