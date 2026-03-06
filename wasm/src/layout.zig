@@ -36,7 +36,15 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
     @memcpy(rankdir_buf[0..rd_len], rankdir_slice[0..rd_len]);
     rankdir_buf[rd_len] = 0;
     c.gviz_set_graph_attr(graph, "rankdir", @ptrCast(&rankdir_buf));
-    c.gviz_set_graph_attr(graph, "splines", "ortho");
+    // Ortho routing produces looping arrows with rankdir=LR/RL;
+    // use curved splines for horizontal directions, ortho for vertical.
+    const is_horizontal = (rankdir_slice.len >= 2 and rankdir_slice[0] == 'L') or
+        (rankdir_slice.len >= 2 and rankdir_slice[0] == 'R' and rankdir_slice[1] == 'L');
+    if (is_horizontal) {
+        c.gviz_set_graph_attr(graph, "splines", "true");
+    } else {
+        c.gviz_set_graph_attr(graph, "splines", "ortho");
+    }
     c.gviz_set_graph_attr(graph, "nodesep", "1.5");
     c.gviz_set_graph_attr(graph, "ranksep", "1.2");
 

@@ -1194,19 +1194,35 @@ export class Diagram {
         points = edgeRoute.points.map(([px, py]) => [px - arrowX, py - arrowY]);
       } else {
         // Fallback: orthogonal route from source edge to target edge
-        const fx = (fromNode.x ?? 0) + fromNode.width / 2;
-        const fy = (fromNode.y ?? 0) + fromNode.height;  // bottom edge of source
-        const tx = (toNode.x ?? 0) + toNode.width / 2;
-        const ty = (toNode.y ?? 0);                       // top edge of target
-        arrowX = fx;
-        arrowY = fy;
-        if (Math.abs(fx - tx) < 1) {
-          // Vertically aligned — straight line
-          points = [[0, 0], [0, ty - fy]];
+        const dirIsHorizontal = this.direction === "LR" || this.direction === "RL";
+        if (dirIsHorizontal) {
+          // LR: right edge of source → left edge of target
+          const fx = (fromNode.x ?? 0) + fromNode.width;
+          const fy = (fromNode.y ?? 0) + fromNode.height / 2;
+          const tx = (toNode.x ?? 0);
+          const ty = (toNode.y ?? 0) + toNode.height / 2;
+          arrowX = fx;
+          arrowY = fy;
+          if (Math.abs(fy - ty) < 1) {
+            points = [[0, 0], [tx - fx, 0]];
+          } else {
+            const midX = Math.round((fx + tx) / 2);
+            points = [[0, 0], [midX - fx, 0], [midX - fx, ty - fy], [tx - fx, ty - fy]];
+          }
         } else {
-          // L-shaped orthogonal route: down to midpoint, across, then down
-          const midY = Math.round((fy + ty) / 2);
-          points = [[0, 0], [0, midY - fy], [tx - fx, midY - fy], [tx - fx, ty - fy]];
+          // TB: bottom edge of source → top edge of target
+          const fx = (fromNode.x ?? 0) + fromNode.width / 2;
+          const fy = (fromNode.y ?? 0) + fromNode.height;
+          const tx = (toNode.x ?? 0) + toNode.width / 2;
+          const ty = (toNode.y ?? 0);
+          arrowX = fx;
+          arrowY = fy;
+          if (Math.abs(fx - tx) < 1) {
+            points = [[0, 0], [0, ty - fy]];
+          } else {
+            const midY = Math.round((fy + ty) / 2);
+            points = [[0, 0], [0, midY - fy], [tx - fx, midY - fy], [tx - fx, ty - fy]];
+          }
         }
       }
 
@@ -1559,8 +1575,8 @@ export class Diagram {
     const SEQ_ACTOR_SPACING = 220;
     const SEQ_ACTOR_WIDTH = 160;
     const SEQ_ACTOR_HEIGHT = 60;
-    const SEQ_MSG_START_Y = 160;
-    const SEQ_MSG_SPACING = 60;
+    const SEQ_MSG_START_Y = 200;
+    const SEQ_MSG_SPACING = 80;
     const LIFELINE_EXTRA = 40; // extra space below last message
 
     const elements: ExcalidrawElement[] = [];
@@ -1752,9 +1768,15 @@ export class Diagram {
     );
     if (graphNodes.length === 0) return null;
 
+    // For LR/RL directions, swap row/col so Graphviz interprets rank constraints correctly.
+    // Graphviz Sugiyama always treats "rank" as the primary axis (TB=vertical, LR=horizontal).
+    // User-facing row/col are in TB space, so we swap them for LR/RL before passing to Graphviz.
+    const isHorizontal = this.direction === "LR" || this.direction === "RL";
     const wasmNodes = graphNodes.map(n => ({
       id: n.id, width: n.width, height: n.height,
-      row: n.row, col: n.col, absX: n.absX, absY: n.absY,
+      row: isHorizontal ? n.col : n.row,
+      col: isHorizontal ? n.row : n.col,
+      absX: n.absX, absY: n.absY,
       type: n.type,
     }));
     const wasmEdges = this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
@@ -1777,7 +1799,40 @@ export class Diagram {
     const result = await layoutGraphWasm(wasmNodes, wasmEdges, wasmGroups.length > 0 ? wasmGroups : undefined, { rankdir: this.direction });
     if (!result) return null;
 
-    return { positioned: this.applyPositions(result.nodes), edgeRoutes: result.edgeRoutes, groupBounds: result.groupBounds };
+    const positioned = this.applyPositions(result.nodes);
+
+    // Sanitize edge routes: detect and fix arrows that loop backwards
+    if (isHorizontal) {
+      for (const [key, route] of result.edgeRoutes) {
+        if (route.points.length < 2) continue;
+        // For LR, arrow X should be monotonically increasing
+        let looping = false;
+        for (let i = 1; i < route.points.length; i++) {
+          if (route.points[i][0] < route.points[0][0] - 5) { looping = true; break; }
+        }
+        if (looping) {
+          // Replace with clean orthogonal path from right edge of source to left edge of target
+          const parts = key.split("->");
+          const fromId = parts[0];
+          const toId = (parts[1] ?? "").replace(/#\d+$/, "");
+          const fromNode = positioned.get(fromId);
+          const toNode = positioned.get(toId);
+          if (fromNode && toNode) {
+            const fx = (fromNode.x ?? 0) + fromNode.width;
+            const fy = (fromNode.y ?? 0) + fromNode.height / 2;
+            const tx = (toNode.x ?? 0);
+            const ty = (toNode.y ?? 0) + toNode.height / 2;
+            const midX = Math.round((fx + tx) / 2);
+            route.points = Math.abs(fy - ty) < 1
+              ? [[fx, fy], [tx, ty]]
+              : [[fx, fy], [midX, fy], [midX, ty], [tx, ty]];
+            route.labelPos = { x: Math.round((fx + tx) / 2), y: Math.round((fy + ty) / 2) - 15 };
+          }
+        }
+      }
+    }
+
+    return { positioned, edgeRoutes: result.edgeRoutes, groupBounds: result.groupBounds };
   }
 
   /** Apply layout positions to nodes, with absX/absY overrides and fallback for unpositioned nodes.
@@ -1825,11 +1880,12 @@ export class Diagram {
       const row = node.row ?? autoRow;
       const col = node.col ?? autoCol;
 
-      // For LR/RL directions, swap row/col spacing
+      // For LR/RL directions, col drives horizontal (X) and row drives vertical (Y)
+      // In TB mode: col→X, row→Y (normal). In LR mode: same, but swap spacing.
       const isHorizontal = this.direction === "LR" || this.direction === "RL";
       result.set(node.id, {
         ...node,
-        x: node.absX ?? (BASE_X + col * (isHorizontal ? COL_SPACING : COL_SPACING)),
+        x: node.absX ?? (BASE_X + col * (isHorizontal ? ROW_SPACING : COL_SPACING)),
         y: node.absY ?? (BASE_Y + row * (isHorizontal ? COL_SPACING : ROW_SPACING)),
       });
 

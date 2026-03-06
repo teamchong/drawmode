@@ -54,11 +54,11 @@ async function generateAwsInfra() {
 }
 
 async function generateDataPipeline() {
-  const d = new Diagram();
+  const d = new Diagram({ direction: "LR" });
   const kafka = d.addBox("Kafka", { row: 0, col: 0, color: "queue" });
-  const flink = d.addBox("Flink", { row: 1, col: 0, color: "backend" });
-  const clickhouse = d.addBox("ClickHouse", { row: 2, col: 0, color: "database" });
-  const grafana = d.addBox("Grafana", { row: 3, col: 0, color: "frontend" });
+  const flink = d.addBox("Flink", { row: 0, col: 1, color: "backend" });
+  const clickhouse = d.addBox("ClickHouse", { row: 0, col: 2, color: "database" });
+  const grafana = d.addBox("Grafana", { row: 0, col: 3, color: "frontend" });
 
   d.connect(kafka, flink, "stream");
   d.connect(flink, clickhouse, "write");
@@ -82,12 +82,12 @@ async function generateSequence() {
 }
 
 async function generateCicd() {
-  const d = new Diagram();
+  const d = new Diagram({ direction: "LR" });
   const github = d.addBox("GitHub", { row: 0, col: 0, color: "external" });
-  const build = d.addBox("Build", { row: 1, col: 0, color: "backend" });
-  const test = d.addBox("Test", { row: 2, col: 0, color: "ai" });
-  const staging = d.addBox("Staging", { row: 3, col: 0, color: "cache" });
-  const prod = d.addBox("Production", { row: 4, col: 0, color: "database" });
+  const build = d.addBox("Build", { row: 0, col: 1, color: "backend" });
+  const test = d.addBox("Test", { row: 0, col: 2, color: "ai" });
+  const staging = d.addBox("Staging", { row: 0, col: 3, color: "cache" });
+  const prod = d.addBox("Production", { row: 0, col: 4, color: "database" });
 
   d.connect(github, build, "push");
   d.connect(build, test, "artifacts");
