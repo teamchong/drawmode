@@ -17,42 +17,14 @@ npx drawmode
 
 ## Client Configuration
 
-### Claude Code
+### MCP Client Configuration
 
-Add to your Claude Code MCP settings:
+Add this to your MCP client's configuration file:
 
-```json
-{
-  "mcpServers": {
-    "drawmode": {
-      "command": "npx",
-      "args": ["drawmode", "--stdio"]
-    }
-  }
-}
-```
-
-### Claude Desktop
-
-Add the same config to Claude Desktop's MCP settings file:
-
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "drawmode": {
-      "command": "npx",
-      "args": ["drawmode", "--stdio"]
-    }
-  }
-}
-```
-
-### Cursor
-
-Add to Cursor's MCP configuration:
+- **Claude Code**: `~/.claude/settings.json` or project `.mcp.json`
+- **Claude Desktop (macOS)**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Claude Desktop (Windows)**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Cursor**: Cursor MCP settings
 
 ```json
 {
@@ -79,7 +51,7 @@ d.connect(api, db, "queries");
 return d.render({ format: "url" });
 ```
 
-This produces a shareable excalidraw.com URL with the rendered diagram.
+This produces a shareable [excalidraw.com](https://excalidraw.com) URL printed in the tool response. Click it to view and edit the diagram in your browser. For local files, use `format: "excalidraw"` — this writes a `.excalidraw` file you can open directly in VS Code (with the Excalidraw extension) or drag into excalidraw.com.
 
 ## Output Formats
 

@@ -48,28 +48,28 @@ export const COLOR_PALETTE: Record<ColorPreset, ColorPair> = {
   queue:         { background: "#fff3bf", stroke: "#fab005" },
   cache:         { background: "#ffe8cc", stroke: "#fd7e14" },
   users:         { background: "#e7f5ff", stroke: "#1971c2" },
-  // AWS
-  "aws-compute":  { background: "#FF9900", stroke: "#C27400" },
-  "aws-storage":  { background: "#3F8624", stroke: "#2D6119" },
-  "aws-database": { background: "#3B48CC", stroke: "#2C3699" },
-  "aws-network":  { background: "#8C4FFF", stroke: "#6B3DBF" },
-  "aws-security": { background: "#DD344C", stroke: "#A52739" },
-  "aws-ml":       { background: "#01A88D", stroke: "#017D69" },
-  // Azure
-  "azure-compute": { background: "#0078D4", stroke: "#005BA1" },
-  "azure-data":    { background: "#50E6FF", stroke: "#3CB8CC" },
-  "azure-network": { background: "#773ADC", stroke: "#5A2CA5" },
-  "azure-ai":      { background: "#0078D4", stroke: "#005BA1" },
-  // GCP
-  "gcp-compute": { background: "#4285F4", stroke: "#3267B8" },
-  "gcp-data":    { background: "#34A853", stroke: "#27803E" },
-  "gcp-network": { background: "#FBBC04", stroke: "#C99603" },
-  "gcp-ai":      { background: "#EA4335", stroke: "#B23228" },
-  // K8s
-  "k8s-pod":     { background: "#326CE5", stroke: "#264FAB" },
-  "k8s-service": { background: "#5B9BD5", stroke: "#4577A0" },
-  "k8s-ingress": { background: "#00BCD4", stroke: "#0097A7" },
-  "k8s-volume":  { background: "#FFC107", stroke: "#C99605" },
+  // AWS — light pastel backgrounds with brand-color strokes for readability
+  "aws-compute":  { background: "#ffe8cc", stroke: "#FF9900" },
+  "aws-storage":  { background: "#d4ecd0", stroke: "#3F8624" },
+  "aws-database": { background: "#d6ddf0", stroke: "#3B48CC" },
+  "aws-network":  { background: "#e4d6ff", stroke: "#8C4FFF" },
+  "aws-security": { background: "#ffd6dc", stroke: "#DD344C" },
+  "aws-ml":       { background: "#ccf0e8", stroke: "#01A88D" },
+  // Azure — light pastel backgrounds with brand-color strokes
+  "azure-compute": { background: "#cce4f7", stroke: "#0078D4" },
+  "azure-data":    { background: "#d6f5ff", stroke: "#0097C7" },
+  "azure-network": { background: "#e2d4f5", stroke: "#773ADC" },
+  "azure-ai":      { background: "#cce4f7", stroke: "#0078D4" },
+  // GCP — light pastel backgrounds with brand-color strokes
+  "gcp-compute": { background: "#d6e4fc", stroke: "#4285F4" },
+  "gcp-data":    { background: "#d4ecd8", stroke: "#34A853" },
+  "gcp-network": { background: "#fef3cc", stroke: "#F9AB00" },
+  "gcp-ai":      { background: "#fcd6d4", stroke: "#EA4335" },
+  // K8s — light pastel backgrounds with brand-color strokes
+  "k8s-pod":     { background: "#d4def5", stroke: "#326CE5" },
+  "k8s-service": { background: "#dde9f5", stroke: "#4577A0" },
+  "k8s-ingress": { background: "#ccf2f5", stroke: "#0097A7" },
+  "k8s-volume":  { background: "#fff3cc", stroke: "#C99605" },
 };
 
 /** Options for adding a box/ellipse to the diagram */

@@ -97,6 +97,27 @@ async function generateCicd() {
   return d.render({ format: "png", path: join(OUT, "cicd.png") });
 }
 
+async function generateFlowchart() {
+  const d = new Diagram();
+  const start = d.addEllipse("Start", { row: 0, col: 1, color: "users" });
+  const input = d.addBox("Receive Request", { row: 1, col: 1, color: "backend" });
+  const valid = d.addDiamond("Valid?", { row: 2, col: 1, color: "orchestration" });
+  const process = d.addBox("Process Order", { row: 3, col: 0, color: "backend" });
+  const reject = d.addBox("Return Error", { row: 3, col: 2, color: "external" });
+  const save = d.addBox("Save to DB", { row: 4, col: 0, color: "database" });
+  const end = d.addEllipse("End", { row: 5, col: 1, color: "users" });
+
+  d.connect(start, input);
+  d.connect(input, valid);
+  d.connect(valid, process, "yes");
+  d.connect(valid, reject, "no");
+  d.connect(process, save);
+  d.connect(save, end);
+  d.connect(reject, end);
+
+  return d.render({ format: "png", path: join(OUT, "flowchart.png") });
+}
+
 async function main() {
   await mkdir(OUT, { recursive: true });
 
@@ -106,6 +127,7 @@ async function main() {
     { name: "data-pipeline", fn: generateDataPipeline },
     { name: "sequence", fn: generateSequence },
     { name: "cicd", fn: generateCicd },
+    { name: "flowchart", fn: generateFlowchart },
   ];
 
   let pngFailed = false;

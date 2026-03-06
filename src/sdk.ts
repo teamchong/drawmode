@@ -1163,6 +1163,13 @@ export class Diagram {
     // Create arrows for edges
     const edgePairCounts = new Map<string, number>(); // track multi-edges between same nodes
 
+    // Count outgoing edges per source node for staggering start points
+    const outgoingCount = new Map<string, number>();
+    const outgoingIdx = new Map<string, number>();
+    for (const edge of this.edges) {
+      outgoingCount.set(edge.from, (outgoingCount.get(edge.from) ?? 0) + 1);
+    }
+
     for (let ei = 0; ei < this.edges.length; ei++) {
       const edge = this.edges[ei];
       const fromNode = positioned.get(edge.from);
@@ -1180,6 +1187,11 @@ export class Diagram {
       const edgeRoute = edgeRoutes?.get(routeKey);
       const hasEdgeRoute = edgeRoute && edgeRoute.points.length >= 2;
 
+      // Stagger start points when multiple arrows leave the same source node edge
+      const srcOutCount = outgoingCount.get(edge.from) ?? 1;
+      const srcOutIdx = outgoingIdx.get(edge.from) ?? 0;
+      outgoingIdx.set(edge.from, srcOutIdx + 1);
+
       // Always elbowed=false — arrows are static polylines (no bindings).
       // Excalidraw renders our exact points without recalculating on interaction.
       const isElbowed = false;
@@ -1187,18 +1199,40 @@ export class Diagram {
       let arrowX: number, arrowY: number;
       let points: number[][];
 
+      // Compute stagger offset for multiple arrows leaving same source node edge.
+      // Distributes start points at 20%, 35%, 50%, 65%, 80% along the edge.
+      const staggerPositions = [0.5, 0.2, 0.8, 0.35, 0.65];
+      let staggerOffsetX = 0;
+      let staggerOffsetY = 0;
+      if (srcOutCount > 1) {
+        const dirIsHoriz = this.direction === "LR" || this.direction === "RL";
+        const pos = staggerPositions[srcOutIdx % staggerPositions.length];
+        if (dirIsHoriz) {
+          staggerOffsetY = Math.round((pos - 0.5) * fromNode.height * 0.6);
+        } else {
+          staggerOffsetX = Math.round((pos - 0.5) * fromNode.width * 0.6);
+        }
+      }
+
       if (hasEdgeRoute) {
         // Use Graphviz-computed route (orthogonal spline points)
-        arrowX = edgeRoute.points[0][0];
-        arrowY = edgeRoute.points[0][1];
-        points = edgeRoute.points.map(([px, py]) => [px - arrowX, py - arrowY]);
+        // Stagger: shift start along source edge to avoid overlapping arrows
+        const baseX = edgeRoute.points[0][0];
+        const baseY = edgeRoute.points[0][1];
+        arrowX = baseX + staggerOffsetX;
+        arrowY = baseY + staggerOffsetY;
+        // points[0] must be [0,0]; all others relative to staggered origin
+        points = [[0, 0]];
+        for (let i = 1; i < edgeRoute.points.length; i++) {
+          points.push([edgeRoute.points[i][0] - arrowX, edgeRoute.points[i][1] - arrowY]);
+        }
       } else {
         // Fallback: orthogonal route from source edge to target edge
         const dirIsHorizontal = this.direction === "LR" || this.direction === "RL";
         if (dirIsHorizontal) {
           // LR: right edge of source → left edge of target
           const fx = (fromNode.x ?? 0) + fromNode.width;
-          const fy = (fromNode.y ?? 0) + fromNode.height / 2;
+          const fy = (fromNode.y ?? 0) + fromNode.height / 2 + staggerOffsetY;
           const tx = (toNode.x ?? 0);
           const ty = (toNode.y ?? 0) + toNode.height / 2;
           arrowX = fx;
@@ -1211,7 +1245,7 @@ export class Diagram {
           }
         } else {
           // TB: bottom edge of source → top edge of target
-          const fx = (fromNode.x ?? 0) + fromNode.width / 2;
+          const fx = (fromNode.x ?? 0) + fromNode.width / 2 + staggerOffsetX;
           const fy = (fromNode.y ?? 0) + fromNode.height;
           const tx = (toNode.x ?? 0) + toNode.width / 2;
           const ty = (toNode.y ?? 0);
@@ -1577,7 +1611,7 @@ export class Diagram {
     const SEQ_ACTOR_HEIGHT = 60;
     const SEQ_MSG_START_Y = 200;
     const SEQ_MSG_SPACING = 80;
-    const LIFELINE_EXTRA = 40; // extra space below last message
+    const LIFELINE_EXTRA = 10; // extra space below last message
 
     const elements: ExcalidrawElement[] = [];
 
@@ -1628,7 +1662,7 @@ export class Diagram {
     }
 
     // Lifeline length depends on message count
-    const lifelineEndY = SEQ_MSG_START_Y + this.sequenceMessages.length * SEQ_MSG_SPACING + LIFELINE_EXTRA;
+    const lifelineEndY = SEQ_MSG_START_Y + (this.sequenceMessages.length - 1) * SEQ_MSG_SPACING + SEQ_MSG_SPACING / 2 + LIFELINE_EXTRA;
 
     // Dashed lifelines
     for (const actor of this.sequenceActors) {
@@ -1801,33 +1835,32 @@ export class Diagram {
 
     const positioned = this.applyPositions(result.nodes);
 
-    // Sanitize edge routes: detect and fix arrows that loop backwards
-    if (isHorizontal) {
-      for (const [key, route] of result.edgeRoutes) {
-        if (route.points.length < 2) continue;
+    // Sanitize edge routes: detect and fix arrows that loop backwards or have teardrop artifacts
+    for (const [key, route] of result.edgeRoutes) {
+      if (route.points.length < 2) continue;
+      const parts = key.split("->");
+      const fromId = parts[0];
+      const toId = (parts[1] ?? "").replace(/#\d+$/, "");
+      const fromNode = positioned.get(fromId);
+      const toNode = positioned.get(toId);
+      if (!fromNode || !toNode) continue;
+
+      if (isHorizontal) {
         // For LR, arrow X should be monotonically increasing
         let looping = false;
         for (let i = 1; i < route.points.length; i++) {
           if (route.points[i][0] < route.points[0][0] - 5) { looping = true; break; }
         }
         if (looping) {
-          // Replace with clean orthogonal path from right edge of source to left edge of target
-          const parts = key.split("->");
-          const fromId = parts[0];
-          const toId = (parts[1] ?? "").replace(/#\d+$/, "");
-          const fromNode = positioned.get(fromId);
-          const toNode = positioned.get(toId);
-          if (fromNode && toNode) {
-            const fx = (fromNode.x ?? 0) + fromNode.width;
-            const fy = (fromNode.y ?? 0) + fromNode.height / 2;
-            const tx = (toNode.x ?? 0);
-            const ty = (toNode.y ?? 0) + toNode.height / 2;
-            const midX = Math.round((fx + tx) / 2);
-            route.points = Math.abs(fy - ty) < 1
-              ? [[fx, fy], [tx, ty]]
-              : [[fx, fy], [midX, fy], [midX, ty], [tx, ty]];
-            route.labelPos = { x: Math.round((fx + tx) / 2), y: Math.round((fy + ty) / 2) - 15 };
-          }
+          const fx = (fromNode.x ?? 0) + fromNode.width;
+          const fy = (fromNode.y ?? 0) + fromNode.height / 2;
+          const tx = (toNode.x ?? 0);
+          const ty = (toNode.y ?? 0) + toNode.height / 2;
+          const midX = Math.round((fx + tx) / 2);
+          route.points = Math.abs(fy - ty) < 1
+            ? [[fx, fy], [tx, ty]]
+            : [[fx, fy], [midX, fy], [midX, ty], [tx, ty]];
+          route.labelPos = { x: Math.round((fx + tx) / 2), y: Math.round((fy + ty) / 2) - 15 };
         }
       }
     }

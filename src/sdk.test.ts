@@ -332,12 +332,12 @@ describe("Diagram SDK", () => {
     const elements = result.json.elements;
 
     const awsShape = elements.find(e => e.id === aws)!;
-    expect(awsShape.backgroundColor).toBe("#FF9900");
-    expect(awsShape.strokeColor).toBe("#C27400");
+    expect(awsShape.backgroundColor).toBe("#ffe8cc");
+    expect(awsShape.strokeColor).toBe("#FF9900");
 
     const k8sShape = elements.find(e => e.id === k8s)!;
-    expect(k8sShape.backgroundColor).toBe("#326CE5");
-    expect(k8sShape.strokeColor).toBe("#264FAB");
+    expect(k8sShape.backgroundColor).toBe("#d4def5");
+    expect(k8sShape.strokeColor).toBe("#326CE5");
   });
 
   // ── New: fromFile + editing ──

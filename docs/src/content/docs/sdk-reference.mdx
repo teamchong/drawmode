@@ -5,6 +5,56 @@ description: Complete API reference for the Diagram SDK.
 
 The `Diagram` class is the main interface for creating diagrams. All methods return element IDs that can be used with `connect()`, `addGroup()`, and editing methods.
 
+## Constructor
+
+### `new Diagram(opts?)`
+
+Create a new diagram with optional configuration:
+
+```typescript
+const d = new Diagram();                          // defaults
+const d = new Diagram({ direction: "LR" });       // left-to-right layout
+const d = new Diagram({ theme: "sketch" });       // hand-drawn style
+const d = new Diagram({ type: "sequence" });      // sequence diagram mode
+```
+
+**Constructor options:**
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `direction` | `"TB" \| "LR" \| "RL" \| "BT"` | `"TB"` | Layout direction (top-bottom, left-right, etc.) |
+| `theme` | `"default" \| "sketch" \| "blueprint" \| "minimal"` | `"default"` | Visual theme preset |
+| `type` | `"architecture" \| "sequence"` | `"architecture"` | Diagram type |
+
+## Themes
+
+### `setTheme(theme)`
+
+Set a theme preset that applies defaults to all subsequently added shapes.
+
+```typescript
+d.setTheme("sketch");    // hand-drawn: hachure fill, roughness 2
+d.setTheme("blueprint"); // technical: clean lines, Cascadia font
+d.setTheme("minimal");   // minimal: thin strokes, Helvetica, 90% opacity
+```
+
+**Available themes:**
+| Theme | Fill Style | Roughness | Stroke Width | Font | Opacity |
+|-------|-----------|-----------|-------------|------|---------|
+| `default` | solid | — | — | Virgil | — |
+| `sketch` | hachure | 2 | — | Virgil | — |
+| `blueprint` | solid | 0 | 1 | Cascadia | — |
+| `minimal` | solid | 0 | 1 | Helvetica | 90 |
+
+Per-node options always override theme defaults.
+
+### `setDirection(direction)`
+
+Set the layout direction after construction.
+
+```typescript
+d.setDirection("LR");  // switch to left-to-right
+```
+
 ## Creating Elements
 
 ### `addBox(label, opts?)`
@@ -139,6 +189,17 @@ const edges = d.getEdges();
 // [{ from: "id1", to: "id2", label: "queries" }, ...]
 ```
 
+### `getNode(id)`
+
+Get properties of a specific node by ID.
+
+```typescript
+const info = d.getNode(id);
+// → { label, type, width, height, backgroundColor, strokeColor, row, col }
+```
+
+Returns `undefined` if the ID doesn't exist.
+
 ### `updateNode(id, opts)`
 
 Update a node's properties.
@@ -170,6 +231,54 @@ Remove an edge between two nodes. Optional label disambiguates multi-edges.
 ```typescript
 d.removeEdge(api, db, "queries");
 ```
+
+## Sequence Diagrams
+
+Create sequence diagrams with actors and messages:
+
+```typescript
+const d = new Diagram({ type: "sequence" });
+const client = d.addActor("Client");
+const api = d.addActor("API Server");
+const db = d.addActor("Database");
+
+d.message(client, api, "POST /login");
+d.message(api, db, "SELECT user");
+d.message(db, api, "user record");
+d.message(api, client, "JWT token");
+
+// Self-messages
+d.message(api, api, "validate token");
+
+return d.render();
+```
+
+### `addActor(label, opts?)`
+
+Add a sequence diagram actor. Returns the actor ID. Uses the same `ShapeOpts` as `addBox`.
+
+### `message(from, to, label?, opts?)`
+
+Add a message between actors. Uses the same `ConnectOpts` as `connect`. Self-messages (same actor) render as rectangular loops.
+
+## Mermaid Import
+
+### `Diagram.fromMermaid(syntax)`
+
+Convert Mermaid syntax into a Diagram for further modification:
+
+```typescript
+const d = Diagram.fromMermaid(`
+  graph LR
+    A[API Gateway] --> B[Auth Service]
+    A --> C[Order Service]
+    B --> D[(Database)]
+`);
+d.updateNode(d.findByLabel("API Gateway")[0], { color: "backend" });
+return d.render();
+```
+
+Supported: `graph TD/LR/RL/BT`, node shapes (`[]`, `{}`, `(())`, `[()]`), edges (`-->`, `---`, `-..->`, `==>`), edge labels (`|label|`), subgraphs, chained edges.
 
 ## Rendering
 
