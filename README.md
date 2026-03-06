@@ -54,8 +54,8 @@ drawmode:     LLM → 10 lines of TypeScript → SDK + Graphviz → valid diagra
 1. LLM receives one tool (`draw`) with TypeScript type definitions (~100 lines)
 2. LLM writes code against the `Diagram` SDK
 3. Local executor runs it — SDK handles labels, colors, IDs
-4. Graphviz `dot` engine handles layout positioning and edge routing (with orthogonal splines)
-5. Zig WASM handles validation
+4. Zig WASM (Graphviz C statically linked) handles layout positioning and edge routing
+5. WASM validation checks the output
 6. Output: `.excalidraw` file, excalidraw.com URL, PNG, SVG, or multiple formats at once. A `.drawmode.ts` sidecar preserves source code for iteration.
 
 ```typescript
@@ -210,7 +210,7 @@ drawmode/
 │   ├── index.ts             # MCP server entry point (stdio + HTTP)
 │   ├── sdk.ts               # Diagram SDK (addBox, connect, render, etc.)
 │   ├── executor.ts          # Local executor
-│   ├── layout.ts            # Layout bridge (Graphviz primary, Zig WASM fallback)
+│   ├── layout.ts            # Layout bridge (loads Zig WASM with Graphviz)
 │   ├── upload.ts            # Excalidraw.com upload
 │   ├── png.ts               # Image export (PNG/SVG via puppeteer)
 │   ├── types.ts             # Shared types
@@ -218,7 +218,7 @@ drawmode/
 ├── wasm/                    # Zig WASM module
 │   └── src/
 │       ├── main.zig         # WASM exports
-│       ├── layout.zig       # Grid layout fallback
+│       ├── layout.zig       # Graphviz layout (C lib statically linked)
 │       ├── arrows.zig       # Arrow routing
 │       ├── validate.zig     # Structural validation
 │       └── util.zig         # Shared utilities
@@ -236,10 +236,13 @@ drawmode/
 - **Cluster subgraphs** — groups rendered as Graphviz clusters
 - **Rank constraints** — nodes with same `row` value share a rank
 
-Falls back to Zig WASM grid → TS grid if Graphviz is unavailable.
+Falls back to a TypeScript grid layout if WASM is unavailable.
 
-### Zig WASM Module
+### Zig WASM Module (`drawmode.wasm`)
 
+Graphviz C is statically linked into a single Zig WASM binary that handles layout, edge routing, and validation:
+
+- **Layout** — Graphviz `dot` Sugiyama algorithm with crossing minimization and orthogonal edge routing
 - **Validation** — bound text elements, no duplicate IDs, arrow endpoints on shape edges, no overlapping elements
 
 ## Development

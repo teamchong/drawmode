@@ -10,8 +10,8 @@ drawmode exposes a single `draw` MCP tool. The LLM writes TypeScript code agains
 1. LLM receives one tool (`draw`) with SDK type definitions (~100 lines)
 2. LLM writes code using the `Diagram` class
 3. `executor.ts` runs code via `new Function("Diagram", code)` with a `ConfiguredDiagram` subclass
-4. Graphviz (statically linked in Zig WASM) handles layout positioning and arrow routing via the `dot` engine
-5. Zig WASM handles validation (layout fallback if Graphviz unavailable)
+4. Zig WASM (Graphviz C statically linked) handles layout positioning and arrow routing via the `dot` engine
+5. WASM validation checks the output (bound text, duplicate IDs, overlapping shapes)
 6. Output: `.excalidraw` file, excalidraw.com URL, `.png` file, or `.svg` file
 
 ## Project Structure
@@ -22,7 +22,7 @@ drawmode/
 │   ├── index.ts             # MCP server entry point (stdio + HTTP)
 │   ├── sdk.ts               # Diagram SDK (addBox, connect, render, etc.)
 │   ├── executor.ts          # Local executor (new Function + Diagram subclass)
-│   ├── layout.ts            # Layout bridge (Graphviz primary, Zig WASM fallback)
+│   ├── layout.ts            # Layout bridge (loads Zig WASM with statically-linked Graphviz)
 │   ├── upload.ts            # Excalidraw.com upload (encrypt + POST)
 │   ├── png.ts               # Image export (PNG/SVG via puppeteer + Excalidraw CDN)
 │   ├── types.ts             # Shared types (ColorPreset, ShapeOpts, ConnectOpts, etc.)
@@ -30,7 +30,7 @@ drawmode/
 ├── wasm/                    # Zig WASM module
 │   ├── src/
 │   │   ├── main.zig         # WASM exports (alloc, resetHeap, layoutGraph, routeArrows, validate)
-│   │   ├── layout.zig       # Grid layout fallback
+│   │   ├── layout.zig       # Graphviz layout (C lib statically linked) + grid fallback
 │   │   ├── arrows.zig       # Arrow routing (unused — Graphviz handles routing)
 │   │   ├── validate.zig     # Structural validation
 │   │   └── util.zig         # Shared utilities
@@ -52,24 +52,19 @@ The primary layout engine is Graphviz — the C library is statically linked int
 - **`rank=same`**: Nodes with same `row` value share a rank in the layout
 - **Coordinate conversion**: Graphviz points (Y-up) → Excalidraw pixels (Y-down)
 
-### Fallback Chain
+### Fallback
 
-```
-Graphviz → Zig WASM grid → TypeScript grid
-```
+Falls back to a TypeScript grid layout if WASM is unavailable.
 
-If Graphviz is unavailable, layout falls back to the Zig WASM grid layout module, then to a pure TypeScript grid implementation.
+## Zig WASM Module (`drawmode.wasm`)
 
-## Zig WASM Module
-
-The Zig WASM module handles validation and provides a grid layout fallback:
+A single Zig WASM binary with Graphviz C statically linked. Handles layout, edge routing, and validation:
 
 **WASM exports:**
 
 | Export | Description |
 |--------|-------------|
-| `layoutGraph` | Grid layout fallback (when Graphviz unavailable) |
-| `routeArrows` | Arrow routing (exists but unused — Graphviz handles routing) |
+| `layoutGraph` | Primary layout engine (Graphviz Sugiyama with orthogonal edge routing) |
 | `validate` | Structural validation (bound text, duplicate IDs, overlapping elements) |
 
 Input/output is JSON bytes — the TypeScript layer serializes to JSON, passes to WASM, and reads back results.

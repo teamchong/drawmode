@@ -67,8 +67,8 @@ This produces a shareable [excalidraw.com](https://excalidraw.com) URL printed i
 1. LLM receives one tool (`draw`) with TypeScript type definitions
 2. LLM writes code against the `Diagram` SDK
 3. Executor runs the code — SDK handles labels, colors, IDs
-4. Graphviz `dot` engine handles layout positioning and edge routing
-5. Zig WASM handles validation
+4. Zig WASM (with Graphviz statically linked) handles layout and edge routing
+5. WASM validation checks the output
 6. Output: `.excalidraw` file, excalidraw.com URL, PNG, or SVG
 
 ## Starting from Mermaid
