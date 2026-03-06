@@ -1405,4 +1405,112 @@ A[Start]-->B[End]`);
       expect(arrows[0].strokeStyle).toBe("dashed");
     });
   });
+
+  describe("edge cases", () => {
+    it("self-loop edge creates valid arrow", async () => {
+      const d = new Diagram();
+      const a = d.addBox("A", { row: 0, col: 0 });
+      d.connect(a, a);
+
+      const result = await d.render({ format: "excalidraw" });
+      const arrow = result.json.elements.find(e => e.type === "arrow");
+      expect(arrow).toBeDefined();
+      // Self-loop arrow exists — bindings may be null depending on layout engine
+      expect(arrow!.points!.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("disconnected nodes included in stats", async () => {
+      const d = new Diagram();
+      const a = d.addBox("A", { row: 0, col: 0 });
+      const b = d.addBox("B", { row: 1, col: 0 });
+      const c = d.addBox("C", { row: 2, col: 0 });
+      d.connect(a, b);
+
+      const result = await d.render({ format: "excalidraw" });
+      expect(result.stats!.nodes).toBe(3);
+      expect(result.stats!.edges).toBe(1);
+    });
+
+    it("RL direction renders without error", async () => {
+      const d = new Diagram({ direction: "RL" });
+      const a = d.addBox("A", { row: 0, col: 0 });
+      const b = d.addBox("B", { row: 0, col: 1 });
+      d.connect(a, b);
+
+      const result = await d.render({ format: "excalidraw" });
+      const elA = result.json.elements.find(e => e.id === a);
+      const elB = result.json.elements.find(e => e.id === b);
+      expect(elA).toBeDefined();
+      expect(elB).toBeDefined();
+      // RL reversal depends on Graphviz WASM; TS fallback places L→R
+      if (isWasmLoaded()) {
+        expect(elB!.x).toBeLessThan(elA!.x);
+      }
+    });
+
+    it("BT direction renders without error", async () => {
+      const d = new Diagram({ direction: "BT" });
+      const a = d.addBox("A", { row: 0, col: 0 });
+      const b = d.addBox("B", { row: 1, col: 0 });
+      d.connect(a, b);
+
+      const result = await d.render({ format: "excalidraw" });
+      const elA = result.json.elements.find(e => e.id === a);
+      const elB = result.json.elements.find(e => e.id === b);
+      expect(elA).toBeDefined();
+      expect(elB).toBeDefined();
+      // BT reversal depends on Graphviz WASM; TS fallback places T→B
+      if (isWasmLoaded()) {
+        expect(elB!.y).toBeLessThan(elA!.y);
+      }
+    });
+
+    it("empty label produces element", async () => {
+      const d = new Diagram();
+      const id = d.addBox("");
+
+      const result = await d.render({ format: "excalidraw" });
+      const shape = result.json.elements.find(e => e.id === id);
+      expect(shape).toBeDefined();
+    });
+
+    it("200-char label produces wider element", async () => {
+      const d = new Diagram();
+      const id = d.addBox("A".repeat(200));
+
+      const result = await d.render({ format: "excalidraw" });
+      const shape = result.json.elements.find(e => e.id === id);
+      expect(shape).toBeDefined();
+      expect(shape!.width).toBeGreaterThan(180);
+    });
+
+    it("special chars in label don't break JSON", async () => {
+      const label = '<script>alert("xss")</script>&amp;';
+      const d = new Diagram();
+      const id = d.addBox(label);
+
+      const result = await d.render({ format: "excalidraw" });
+      expect(() => JSON.stringify(result.json)).not.toThrow();
+      const textEl = result.json.elements.find(e => e.id === `${id}-text`);
+      expect(textEl).toBeDefined();
+      expect(textEl!.text).toBe(label);
+    });
+
+    it("all arrowhead types wire through", async () => {
+      const arrowheadTypes = [null, "arrow", "bar", "dot", "triangle", "diamond", "diamond_outline"] as const;
+
+      for (const arrowhead of arrowheadTypes) {
+        const d = new Diagram();
+        const a = d.addBox("A", { row: 0, col: 0 });
+        const b = d.addBox("B", { row: 1, col: 0 });
+        d.connect(a, b, "label", { startArrowhead: arrowhead, endArrowhead: arrowhead });
+
+        const result = await d.render({ format: "excalidraw" });
+        const arrow = result.json.elements.find(e => e.type === "arrow");
+        expect(arrow).toBeDefined();
+        expect(arrow!.startArrowhead).toBe(arrowhead);
+        expect(arrow!.endArrowhead).toBe(arrowhead);
+      }
+    });
+  });
 });
