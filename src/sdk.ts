@@ -193,6 +193,171 @@ function computeBounds(points: number[][]): { minX: number; minY: number; maxX: 
   return { minX, minY, maxX, maxY };
 }
 
+/** AABB overlap check with optional padding */
+function rectsOverlap(
+  ax: number, ay: number, aw: number, ah: number,
+  bx: number, by: number, bw: number, bh: number,
+  pad = 0,
+): boolean {
+  return ax - pad < bx + bw && ax + aw + pad > bx &&
+         ay - pad < by + bh && ay + ah + pad > by;
+}
+
+type Rect = { x: number; y: number; width: number; height: number };
+
+/**
+ * Resolve overlapping arrow labels against all static elements.
+ * Iterates until no label moves or budget is exhausted.
+ *
+ * Checks labels against: other labels, node shapes, group boundaries, arrow segments.
+ */
+function resolveOverlaps(elements: ExcalidrawElement[], budget = 10): void {
+  // Moveable: arrow labels (free-standing text with "arrlbl_" prefix)
+  const labels = elements.filter(
+    el => el.type === "text" && el.id.startsWith("arrlbl_"),
+  );
+  if (labels.length === 0) return;
+
+  // Static obstacles: shapes (not groups, not group labels, not bound text)
+  const nodeRects: Rect[] = [];
+  for (const el of elements) {
+    if ((el.type === "rectangle" || el.type === "ellipse" || el.type === "diamond") &&
+        !el.id.startsWith("grp_") && !el.id.startsWith("frm_")) {
+      nodeRects.push(el);
+    }
+  }
+
+  // Group boundaries (dashed rectangles)
+  const groupRects: Rect[] = [];
+  for (const el of elements) {
+    if (el.id.startsWith("grp_") && !el.id.endsWith("-label")) {
+      groupRects.push(el);
+    }
+  }
+
+  // Arrow segments, tagged with their label ID so we can skip self-overlap
+  const arrowSegs: { x1: number; y1: number; x2: number; y2: number; labelId?: string }[] = [];
+  for (const el of elements) {
+    if (el.type === "arrow" && el.points && el.points.length >= 2) {
+      const labelId = (el.customData as Record<string, unknown> | undefined)?._labelId as string | undefined;
+      for (let s = 0; s < el.points.length - 1; s++) {
+        arrowSegs.push({
+          x1: el.x + el.points[s][0], y1: el.y + el.points[s][1],
+          x2: el.x + el.points[s + 1][0], y2: el.y + el.points[s + 1][1],
+          labelId,
+        });
+      }
+    }
+  }
+
+  // Check if a label rect overlaps any obstacle (skip own arrow segments)
+  const hasCollision = (idx: number, lx: number, ly: number, lw: number, lh: number): boolean => {
+    const selfId = labels[idx].id;
+    // vs other labels
+    for (let j = 0; j < labels.length; j++) {
+      if (j === idx) continue;
+      const o = labels[j];
+      if (rectsOverlap(lx, ly, lw, lh, o.x, o.y, o.width, o.height)) return true;
+    }
+    // vs nodes
+    for (const n of nodeRects) {
+      if (rectsOverlap(lx, ly, lw, lh, n.x, n.y, n.width, n.height)) return true;
+    }
+    // vs group boundaries (only the border strip, not the interior)
+    for (const g of groupRects) {
+      const borderW = 4; // approximate stroke hit area
+      // top edge
+      if (rectsOverlap(lx, ly, lw, lh, g.x, g.y, g.width, borderW)) return true;
+      // bottom edge
+      if (rectsOverlap(lx, ly, lw, lh, g.x, g.y + g.height - borderW, g.width, borderW)) return true;
+      // left edge
+      if (rectsOverlap(lx, ly, lw, lh, g.x, g.y, borderW, g.height)) return true;
+      // right edge
+      if (rectsOverlap(lx, ly, lw, lh, g.x + g.width - borderW, g.y, borderW, g.height)) return true;
+    }
+    // vs arrow segments (AABB approximation) — skip own arrow
+    for (const seg of arrowSegs) {
+      if (seg.labelId === selfId) continue; // don't collide with own arrow
+      const sx = Math.min(seg.x1, seg.x2), sy = Math.min(seg.y1, seg.y2);
+      const sw = Math.abs(seg.x2 - seg.x1) || 2; // min 2px for vertical lines
+      const sh = Math.abs(seg.y2 - seg.y1) || 2; // min 2px for horizontal lines
+      if (rectsOverlap(lx, ly, lw, lh, sx, sy, sw, sh)) return true;
+    }
+    return false;
+  };
+
+  // Shift offsets: small nudges first, then larger jumps in 8 directions
+  const makeOffsets = (w: number, h: number) => [
+    // Small nudges (just clear the overlap)
+    { dx: 0, dy: -(h + 4) },
+    { dx: 0, dy: h + 4 },
+    { dx: -(w / 2 + 4), dy: 0 },
+    { dx: w / 2 + 4, dy: 0 },
+    // Medium shifts
+    { dx: 0, dy: -(h + 10) },
+    { dx: 0, dy: h + 10 },
+    { dx: -(w + 6), dy: 0 },
+    { dx: w + 6, dy: 0 },
+    // Diagonal shifts
+    { dx: -(w + 6), dy: -(h + 6) },
+    { dx: w + 6, dy: -(h + 6) },
+    { dx: -(w + 6), dy: h + 6 },
+    { dx: w + 6, dy: h + 6 },
+    // Large shifts
+    { dx: 0, dy: -(h + 24) },
+    { dx: 0, dy: h + 24 },
+    { dx: -(w + 24), dy: 0 },
+    { dx: w + 24, dy: 0 },
+  ];
+
+  // Iterate until stable or budget exhausted
+  for (let iter = 0; iter < budget; iter++) {
+    let moved = false;
+    for (let i = 0; i < labels.length; i++) {
+      const cur = labels[i];
+      if (!hasCollision(i, cur.x, cur.y, cur.width, cur.height)) continue;
+
+      const offsets = makeOffsets(cur.width, cur.height);
+      for (const { dx, dy } of offsets) {
+        const nx = cur.x + dx, ny = cur.y + dy;
+        if (!hasCollision(i, nx, ny, cur.width, cur.height)) {
+          cur.x = nx;
+          cur.y = ny;
+          moved = true;
+          break;
+        }
+      }
+    }
+    if (!moved) break; // stable
+  }
+}
+
+/**
+ * Resolve overlapping nodes in the grid fallback layout.
+ * Nudges nodes that share the same cell to adjacent positions.
+ */
+function resolveNodeOverlaps(positioned: Map<string, { x?: number; y?: number; width: number; height: number }>, budget = 5): void {
+  const nodes = Array.from(positioned.values());
+  if (nodes.length < 2) return;
+
+  for (let iter = 0; iter < budget; iter++) {
+    let moved = false;
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      const ax = a.x ?? 0, ay = a.y ?? 0;
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        const bx = b.x ?? 0, by = b.y ?? 0;
+        if (!rectsOverlap(ax, ay, a.width, a.height, bx, by, b.width, b.height, 10)) continue;
+        // Nudge b to the right by one column spacing
+        b.x = (b.x ?? 0) + COL_SPACING;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+}
+
 export class Diagram {
   private nodes = new Map<string, GraphNode>();
   private edges: GraphEdge[] = [];
@@ -1398,78 +1563,10 @@ export class Diagram {
       }
     }
 
-    // Arrow label collision avoidance: shift overlapping labels
-    // Labels are free-standing text (containerId=null), identified by "arrlbl_" prefix
-    const labelElements = elements.filter(
-      el => el.type === "text" && el.id.startsWith("arrlbl_"),
-    );
-
-    // Collect arrow segments for label-vs-arrow collision checks
-    const arrowSegments: { x1: number; y1: number; x2: number; y2: number }[] = [];
-    for (const el of elements) {
-      if (el.type === "arrow" && el.points && el.points.length >= 2) {
-        for (let s = 0; s < el.points.length - 1; s++) {
-          arrowSegments.push({
-            x1: el.x + el.points[s][0], y1: el.y + el.points[s][1],
-            x2: el.x + el.points[s + 1][0], y2: el.y + el.points[s + 1][1],
-          });
-        }
-      }
-    }
-
-    // Check if a rectangle overlaps any arrow segment (approximate: check if segment passes through rect)
-    const overlapsArrow = (lx: number, ly: number, lw: number, lh: number): boolean => {
-      for (const seg of arrowSegments) {
-        // Quick AABB check: does the segment's bounding box overlap the label rect?
-        const segMinX = Math.min(seg.x1, seg.x2), segMaxX = Math.max(seg.x1, seg.x2);
-        const segMinY = Math.min(seg.y1, seg.y2), segMaxY = Math.max(seg.y1, seg.y2);
-        if (segMaxX < lx || segMinX > lx + lw || segMaxY < ly || segMinY > ly + lh) continue;
-        // Segment passes through label bounding box — count as collision
-        return true;
-      }
-      return false;
-    };
-
-    // Check if a rectangle overlaps any other label
-    const overlapsLabel = (idx: number, lx: number, ly: number, lw: number, lh: number): boolean => {
-      for (let j = 0; j < labelElements.length; j++) {
-        if (j === idx) continue;
-        const other = labelElements[j];
-        if (lx < other.x + other.width && lx + lw > other.x &&
-            ly < other.y + other.height && ly + lh > other.y) {
-          return true;
-        }
-      }
-      return false;
-    };
-
-    // Multi-pass: shift labels that overlap other labels or arrows
-    for (let pass = 0; pass < 3; pass++) {
-      for (let i = 0; i < labelElements.length; i++) {
-        const cur = labelElements[i];
-        const curW = cur.width;
-        const curH = cur.height;
-        if (!overlapsLabel(i, cur.x, cur.y, curW, curH) && !overlapsArrow(cur.x, cur.y, curW, curH)) continue;
-
-        // Try shifting: above, below, left, right
-        const offsets = [
-          { dx: 0, dy: -(curH + 8) },   // above
-          { dx: 0, dy: curH + 8 },       // below
-          { dx: -(curW + 8), dy: 0 },    // left
-          { dx: curW + 8, dy: 0 },       // right
-          { dx: 0, dy: -(curH + 20) },   // further above
-          { dx: 0, dy: curH + 20 },      // further below
-        ];
-        for (const { dx, dy } of offsets) {
-          const nx = cur.x + dx, ny = cur.y + dy;
-          if (!overlapsLabel(i, nx, ny, curW, curH) && !overlapsArrow(nx, ny, curW, curH)) {
-            cur.x = nx;
-            cur.y = ny;
-            break;
-          }
-        }
-      }
-    }
+    // ── Unified overlap resolver ──
+    // Iterates until stable or budget exhausted. Arrow labels are moveable;
+    // they check against nodes, groups, other labels, and arrow segments.
+    resolveOverlaps(elements);
 
     // Groups: dashed rectangle around children + label
     // Use Graphviz cluster bounding boxes when available (guaranteed non-overlapping)
@@ -1828,9 +1925,11 @@ export class Diagram {
     const wasmResult = await this.layoutNodesWasm();
     if (wasmResult) return wasmResult;
 
-    // Fallback: TS grid layout
+    // Fallback: TS grid layout + overlap nudging
     warnings?.push("Graphviz layout unavailable; using grid fallback");
-    return { positioned: this.layoutNodesGrid() };
+    const positioned = this.layoutNodesGrid();
+    resolveNodeOverlaps(positioned);
+    return { positioned };
   }
 
   private async layoutNodesWasm(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] } | null> {

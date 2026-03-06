@@ -1496,6 +1496,48 @@ A[Start]-->B[End]`);
       expect(textEl!.text).toBe(label);
     });
 
+    it("arrow labels do not overlap nodes", async () => {
+      const d = new Diagram();
+      const a = d.addBox("A", { row: 0, col: 0 });
+      const b = d.addBox("B", { row: 0, col: 1 });
+      const c = d.addBox("C", { row: 1, col: 0 });
+      const e = d.addBox("D", { row: 1, col: 1 });
+      d.connect(a, b, "right");
+      d.connect(a, c, "down");
+      d.connect(a, e, "diagonal");
+      d.connect(b, c, "cross");
+
+      const result = await d.render({ format: "excalidraw" });
+      const els = result.json.elements;
+      const labels = els.filter((el: any) => el.type === "text" && el.id.startsWith("arrlbl_"));
+      const nodes = els.filter((el: any) =>
+        (el.type === "rectangle" || el.type === "ellipse" || el.type === "diamond") &&
+        !el.id.startsWith("grp_"),
+      );
+
+      for (const lbl of labels) {
+        for (const node of nodes) {
+          const overlaps =
+            lbl.x < node.x + node.width && lbl.x + lbl.width > node.x &&
+            lbl.y < node.y + node.height && lbl.y + lbl.height > node.y;
+          expect(overlaps, `Label "${lbl.text}" overlaps node at (${node.x},${node.y})`).toBe(false);
+        }
+      }
+    });
+
+    it("grid fallback nudges overlapping nodes apart", async () => {
+      const d = new Diagram();
+      d.addBox("A", { row: 0, col: 0 });
+      d.addBox("B", { row: 0, col: 0 });
+      const result = await d.render({ format: "excalidraw" });
+      const rects = result.json.elements.filter((e: any) => e.type === "rectangle");
+      expect(rects.length).toBe(2);
+      if (!isWasmLoaded()) {
+        const samePos = rects[0].x === rects[1].x && rects[0].y === rects[1].y;
+        expect(samePos).toBe(false);
+      }
+    });
+
     it("all arrowhead types wire through", async () => {
       const arrowheadTypes = [null, "arrow", "bar", "dot", "triangle", "diamond", "diamond_outline"] as const;
 

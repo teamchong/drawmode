@@ -19,3 +19,4 @@ src/__snapshots__/diffs/
 # Environment
 .env
 .env.local
+*.bak
