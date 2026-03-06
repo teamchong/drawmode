@@ -429,11 +429,14 @@ export class Diagram {
     const extraLines = displayLabel.split("\n").length - 1;
     const measured = measureText(displayLabel, mergedOpts?.fontSize ?? 16, mergedOpts?.fontFamily ?? 1);
     const autoWidth = Math.max(DEFAULT_WIDTH, measured.width + 40);
+    // Minimum height must fit the text content + padding (20px top/bottom)
+    const minTextHeight = measured.height + 20;
+    const computedHeight = mergedOpts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT);
     this.nodes.set(id, {
       id, label: displayLabel, type,
       row: mergedOpts?.row, col: mergedOpts?.col,
       width: mergedOpts?.width ?? autoWidth,
-      height: mergedOpts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT),
+      height: Math.max(computedHeight, minTextHeight),
       color: resolveColor(mergedOpts, defaultPreset),
       opts: mergedOpts,
       absX: mergedOpts?.x,
@@ -1355,9 +1358,10 @@ export class Diagram {
       });
 
       const textWidth = node.width - 20;
-      const textHeight = 20;
-
       const boundFf: FontFamily = o?.fontFamily ?? 1;
+      const textMeasured = measureText(node.label, o?.fontSize ?? 16, boundFf);
+      const textHeight = Math.max(20, textMeasured.height);
+
       elements.push({
         id: textId,
         type: "text",
