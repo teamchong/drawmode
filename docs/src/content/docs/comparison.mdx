@@ -20,6 +20,45 @@ Several MCP-based tools can generate diagrams from AI coding assistants. This pa
 | Sequence diagrams | Yes (`addActor`/`message`) | Manual | Yes | Yes |
 | Code Mode | Yes (typed SDK) | No (raw JSON) | No (DSL) | No (XML) |
 
+## Side-by-Side: Same Diagram, Different Approaches
+
+Here's the same 3-node diagram expressed in each tool's format:
+
+**drawmode** — 6 lines of TypeScript:
+```typescript
+const d = new Diagram();
+const api = d.addBox("API", { color: "backend" });
+const db = d.addBox("DB", { color: "database" });
+d.connect(api, db, "queries");
+return d.render();
+```
+
+**Raw Excalidraw JSON** — ~120 lines (abbreviated):
+```json
+{
+  "elements": [
+    { "id": "rect1", "type": "rectangle", "x": 100, "y": 100,
+      "width": 180, "height": 80, "backgroundColor": "#d0bfff",
+      "strokeColor": "#7048e8", "boundElements": [{"type":"text","id":"t1"}], ... },
+    { "id": "t1", "type": "text", "text": "API", "containerId": "rect1", ... },
+    { "id": "rect2", "type": "rectangle", "x": 100, "y": 300, ... },
+    { "id": "t2", "type": "text", "text": "DB", "containerId": "rect2", ... },
+    { "id": "arr1", "type": "arrow", "x": 190, "y": 180,
+      "points": [[0,0],[0,120]], "elbowed": true, "roundness": null,
+      "roughness": 0, "startBinding": {"elementId":"rect1",...},
+      "endBinding": {"elementId":"rect2",...}, ... }
+  ]
+}
+```
+
+**Mermaid** — 4 lines of DSL:
+```
+graph TD
+    API[API] --> |queries| DB[DB]
+```
+
+drawmode's SDK is more verbose than Mermaid for trivial cases, but produces pixel-perfect Excalidraw output with automatic layout, 28 color presets, and full editing capabilities via `fromFile()`.
+
 ## Why Code Mode?
 
 drawmode uses a **Code Mode** approach: instead of having the LLM describe a diagram in natural language or write raw JSON, it writes TypeScript code against a typed SDK. This matters for several reasons.

@@ -70,3 +70,28 @@ This produces a shareable [excalidraw.com](https://excalidraw.com) URL printed i
 4. Graphviz `dot` engine handles layout positioning and edge routing
 5. Zig WASM handles validation
 6. Output: `.excalidraw` file, excalidraw.com URL, PNG, or SVG
+
+## Starting from Mermaid
+
+Already have a Mermaid diagram? Use `fromMermaid()` as a starting point, then refine with the full SDK:
+
+```typescript
+const d = Diagram.fromMermaid(`
+  graph TD
+    A[API Gateway] --> B[Auth Service]
+    A --> C[Order Service]
+    B --> D[(Database)]
+`);
+d.updateNode(d.findByLabel("API Gateway")[0], { color: "backend" });
+return d.render();
+```
+
+See [Iterating on Diagrams](/drawmode/iterating/#mermaid-import) for supported Mermaid syntax.
+
+## Troubleshooting
+
+**Diagram is blank or missing elements?** Check that your code returns `d.render()` — a missing `return` statement is the most common cause.
+
+**PNG/SVG export fails?** Install puppeteer: `npm install puppeteer`. It's optional — other formats work without it.
+
+**"Cannot find module" errors?** Make sure `npx drawmode --stdio` runs successfully on its own before configuring your MCP client.
