@@ -1,6 +1,7 @@
 {
   "name": "drawmode",
   "version": "0.1.0",
+  "packageManager": "pnpm@10.21.0",
   "description": "Code Mode MCP server for generating Excalidraw architecture diagrams with auto-layout",
   "type": "module",
   "bin": {
