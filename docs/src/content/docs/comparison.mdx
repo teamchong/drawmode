@@ -1,0 +1,45 @@
+---
+title: Comparison
+description: How drawmode compares to other diagram tools for AI coding assistants
+---
+
+Several MCP-based tools can generate diagrams from AI coding assistants. This page compares drawmode with other popular options to help you choose the right tool for your workflow.
+
+## Feature Comparison
+
+| Feature | drawmode | Excalidraw MCP | Mermaid MCP | Draw.io MCP |
+|---------|----------|---------------|-------------|-------------|
+| Input | TypeScript SDK | Natural language | Mermaid syntax | Natural language |
+| Auto-layout | Graphviz (Sugiyama) | Manual | Built-in | Built-in |
+| Edge routing | Orthogonal 90° | Manual | Basic | Curves |
+| Color presets | 28 (general + cloud) | Custom hex | 5 themes | Built-in |
+| Edit existing | `fromFile()` + `updateNode()` | Yes | Reimport | Yes |
+| Outputs | file, URL, PNG, SVG | Interactive UI | PNG, SVG | XML |
+| Cloud deploy | Cloudflare Workers | Cloud-hosted | Local only | Local only |
+| Validation | Zig WASM | Canvas feedback | Syntax | None |
+| Sequence diagrams | Yes (`addActor`/`message`) | Manual | Yes | Yes |
+| Code Mode | Yes (typed SDK) | No (raw JSON) | No (DSL) | No (XML) |
+
+## Why Code Mode?
+
+drawmode uses a **Code Mode** approach: instead of having the LLM describe a diagram in natural language or write raw JSON, it writes TypeScript code against a typed SDK. This matters for several reasons.
+
+**Raw Excalidraw JSON is error-prone.** Labels require two separate elements (a shape with `boundElements` and a text element with `containerId`). Arrow bindings need precise edge coordinates, staggered connection points, and specific property combinations (`elbowed: true`, `roundness: null`, `roughness: 0`). LLMs frequently produce broken diagrams when writing this JSON directly.
+
+**A typed SDK catches errors at the API level.** Calling `addBox("API Gateway")` always produces a valid shape-plus-label pair. `connect(a, b)` handles arrow geometry automatically. The LLM cannot produce structurally invalid output because the SDK enforces correctness.
+
+**Code is readable, diffable, and version-controllable.** A 10-line TypeScript snippet is easier to review and modify than 200 lines of Excalidraw JSON. You can commit diagram source code alongside your application code.
+
+**`fromFile()` enables incremental editing.** Load an existing `.excalidraw` file, find nodes with `findByLabel()`, update them with `updateNode()`, add new connections — without regenerating the entire diagram from scratch.
+
+**Graphviz handles layout automatically.** The Sugiyama algorithm with orthogonal edge routing produces clean, readable graphs. No manual coordinate math, no overlapping nodes, no crossed edges.
+
+## When to use alternatives
+
+Different tools suit different needs. Here is when you might prefer another option:
+
+- **Excalidraw MCP** is a better fit when you want interactive, hand-drawn-style editing with real-time visual feedback. Its canvas-based approach lets you drag, resize, and refine diagrams manually after generation.
+
+- **Mermaid MCP** works well for simple diagrams with minimal setup. Mermaid's text-based syntax is widely supported, renders in GitHub Markdown, and requires no external dependencies. If your diagram fits Mermaid's built-in chart types, the setup cost is lower.
+
+- **Draw.io MCP** is worth considering when you need complex XML-based diagrams with specific tool integration, or when your team already uses Draw.io as a standard diagramming tool.

@@ -2,6 +2,8 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
 export default defineConfig({
+  site: "https://teamchong.github.io",
+  base: "/drawmode",
   integrations: [
     starlight({
       title: "drawmode",
@@ -15,6 +17,8 @@ export default defineConfig({
       sidebar: [
         { label: "Overview", slug: "index" },
         { label: "Getting Started", slug: "getting-started" },
+        { label: "Examples", slug: "examples" },
+        { label: "Comparison", slug: "comparison" },
         { label: "SDK Reference", slug: "sdk-reference" },
         { label: "Color Presets", slug: "color-presets" },
         { label: "Architecture", slug: "architecture" },
