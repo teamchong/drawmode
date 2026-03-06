@@ -156,6 +156,17 @@ export default {
       return Response.json({ status: "ok", service: "drawmode", mode: "worker" });
     }
 
+    // CORS preflight — must be handled before MCP transport (which rejects OPTIONS as 405)
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, mcp-session-id, mcp-protocol-version",
+        },
+      });
+    }
+
     // MCP endpoint — stateless via WebStandardStreamableHTTPServerTransport
     if (url.pathname === "/mcp") {
       const server = createServer(env);
@@ -182,17 +193,6 @@ export default {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "POST, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type",
-        },
-      });
-    }
-
-    // CORS preflight
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, mcp-session-id, mcp-protocol-version",
         },
       });
     }

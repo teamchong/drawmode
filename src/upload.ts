@@ -46,6 +46,42 @@ function concatBuffers(...buffers: Uint8Array[]): Uint8Array {
   return result;
 }
 
+/** Fallback zlib compression when WASM module is not available (e.g. Cloudflare Workers). */
+async function zlibCompressFallback(data: Uint8Array): Promise<Uint8Array> {
+  // Try Node.js zlib (available in local Node.js and Workers with nodejs_compat)
+  try {
+    const mod = "node:zlib";
+    const { deflateSync } = await import(mod);
+    return new Uint8Array(deflateSync(Buffer.from(data)));
+  } catch {
+    // Not in Node.js — try CompressionStream (Web API, available in Workers + modern browsers)
+  }
+
+  if (typeof CompressionStream !== "undefined") {
+    const cs = new CompressionStream("deflate");
+    const writer = cs.writable.getWriter();
+    const reader = cs.readable.getReader();
+    writer.write(data as unknown as BufferSource);
+    writer.close();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const total = chunks.reduce((s, c) => s + c.byteLength, 0);
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return result;
+  }
+
+  throw new Error("No zlib compression available (no WASM, no Node.js zlib, no CompressionStream)");
+}
+
 export async function uploadToExcalidraw(jsonString: string): Promise<string> {
   // 1. Generate key and export as JWK to get the base64url key for the URL
   const cryptoKey = await crypto.subtle.generateKey(
@@ -61,10 +97,11 @@ export async function uploadToExcalidraw(jsonString: string): Promise<string> {
   const dataBuffer = new TextEncoder().encode(jsonString);
   const innerConcat = concatBuffers(contentsMetadata, dataBuffer);
 
-  // 3. zlib compress (Zig WASM fixed-Huffman deflate) → encrypt
-  const compressed = zlibCompress(innerConcat);
+  // 3. zlib compress → encrypt
+  // Try Zig WASM first, fall back to Node.js zlib or CompressionStream
+  let compressed = zlibCompress(innerConcat);
   if (!compressed) {
-    throw new Error("WASM zlib compression failed — WASM module not loaded");
+    compressed = await zlibCompressFallback(innerConcat);
   }
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
   const encryptedBuffer = await crypto.subtle.encrypt(
