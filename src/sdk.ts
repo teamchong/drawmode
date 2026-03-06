@@ -276,11 +276,13 @@ function resolveOverlaps(elements: ExcalidrawElement[], budget = 10): void {
       if (rectsOverlap(lx, ly, lw, lh, g.x + g.width - borderW, g.y, borderW, g.height)) return true;
     }
     // vs arrow segments (AABB approximation) — skip own arrow
+    // Pad segments by 10px to account for visual stroke width + arrowheads
+    const SEG_PAD = 10;
     for (const seg of arrowSegs) {
       if (seg.labelId === selfId) continue; // don't collide with own arrow
-      const sx = Math.min(seg.x1, seg.x2), sy = Math.min(seg.y1, seg.y2);
-      const sw = Math.abs(seg.x2 - seg.x1) || 2; // min 2px for vertical lines
-      const sh = Math.abs(seg.y2 - seg.y1) || 2; // min 2px for horizontal lines
+      const sx = Math.min(seg.x1, seg.x2) - SEG_PAD, sy = Math.min(seg.y1, seg.y2) - SEG_PAD;
+      const sw = (Math.abs(seg.x2 - seg.x1) || 2) + SEG_PAD * 2;
+      const sh = (Math.abs(seg.y2 - seg.y1) || 2) + SEG_PAD * 2;
       if (rectsOverlap(lx, ly, lw, lh, sx, sy, sw, sh)) return true;
     }
     return false;
