@@ -28,4 +28,6 @@ jobs:
       - run: pnpm typecheck
       - name: Zig tests
         run: cd wasm && zig build test
+      - name: Install Chrome for puppeteer tests
+        run: npx puppeteer browsers install chrome
       - run: pnpm test
