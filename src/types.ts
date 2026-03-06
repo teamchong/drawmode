@@ -120,6 +120,8 @@ export interface ConnectOpts {
   /** Whether to use elbow routing (default true) */
   elbowed?: boolean;
   labelFontSize?: number;
+  /** Where to place the edge label along the arrow path */
+  labelPosition?: "start" | "middle" | "end";
   /** Arbitrary custom metadata stored on the arrow element */
   customData?: Record<string, unknown> | null;
 }
@@ -213,6 +215,7 @@ export interface ThemeOpts {
 
 /** Output format options */
 export type OutputFormat = "excalidraw" | "url" | "png" | "svg";
+export type OutputFormatInput = OutputFormat | OutputFormat[];
 
 /** Diagram statistics computed from the element graph */
 export interface DiagramStats {
@@ -226,6 +229,8 @@ export interface RenderResult {
   json: ExcalidrawFile;
   url?: string;
   filePath?: string;
+  /** All file paths written (when using multi-format output) */
+  filePaths?: string[];
   pngBase64?: string;
   svgString?: string;
   warnings?: string[];
@@ -235,7 +240,7 @@ export interface RenderResult {
 
 /** Render options */
 export interface RenderOpts {
-  format?: OutputFormat;
+  format?: OutputFormatInput;
   path?: string;
   /** Source code for sidecar file */
   sourceCode?: string;

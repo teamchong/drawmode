@@ -7,7 +7,7 @@ import type {
   ColorPreset, ShapeOpts, ConnectOpts, RenderOpts, RenderResult,
   GraphNode, GraphEdge, FillStyle, StrokeStyle, FontFamily,
   Arrowhead, TextAlign, VerticalAlign, ColorPair,
-  ExcalidrawElement, ExcalidrawFile,
+  ExcalidrawElement, ExcalidrawFile, OutputFormat,
   ThemePreset, ThemeOpts, LayoutDirection, DiagramType,
 } from "./types.js";
 import { COLOR_PALETTE, ExcalidrawFileSchema } from "./types.js";
@@ -112,6 +112,18 @@ const THEME_PRESETS: Record<ThemePreset, ThemeOpts> = {
   minimal: { fillStyle: "solid", roughness: 0, strokeWidth: 1, fontFamily: 2, opacity: 90 },
 };
 
+/** Options for group styling and layout */
+export interface GroupOpts {
+  /** Padding in pixels around group children (default 30) */
+  padding?: number;
+  /** Stroke color for the group boundary */
+  strokeColor?: string;
+  /** Stroke style for the group boundary (default "dashed") */
+  strokeStyle?: StrokeStyle;
+  /** Opacity 0-100 (default 60) */
+  opacity?: number;
+}
+
 const DEFAULT_WIDTH = 180;
 const DEFAULT_HEIGHT = 80;
 const LINE_HEIGHT = 24; // extra height per additional line of text
@@ -184,7 +196,7 @@ function computeBounds(points: number[][]): { minX: number; minY: number; maxX: 
 export class Diagram {
   private nodes = new Map<string, GraphNode>();
   private edges: GraphEdge[] = [];
-  private groups = new Map<string, { label: string; children: string[] }>();
+  private groups = new Map<string, { label: string; children: string[]; opts?: GroupOpts }>();
   private frames = new Map<string, { name: string; children: string[] }>();
   /** Passthrough elements from fromFile() — re-emitted unchanged */
   private passthrough: ExcalidrawElement[] = [];
@@ -309,9 +321,9 @@ export class Diagram {
 
   /** Group elements together with a dashed boundary and label.
    *  Children can be node IDs or other group IDs (for nesting). */
-  addGroup(label: string, children: string[]): string {
+  addGroup(label: string, children: string[], opts?: GroupOpts): string {
     const id = this.nextId("grp");
-    this.groups.set(id, { label, children });
+    this.groups.set(id, { label, children, opts });
     return id;
   }
 
@@ -930,66 +942,77 @@ export class Diagram {
       groups: this.groups.size,
     };
 
-    const format = opts?.format ?? "excalidraw";
+    const formatInput = opts?.format ?? "excalidraw";
+    const formats: OutputFormat[] = Array.isArray(formatInput) ? formatInput : [formatInput];
+    const filePaths: string[] = [];
 
-    if (format === "excalidraw") {
-      const { writeFile, readFile, access, copyFile } = await import("node:fs/promises");
-      const path = opts?.path ?? "diagram.excalidraw";
+    for (const format of formats) {
+      if (format === "excalidraw") {
+        const { writeFile, readFile, access, copyFile } = await import("node:fs/promises");
+        const path = opts?.path ?? "diagram.excalidraw";
 
-      // Auto-backup existing file before overwriting + compute diff
+        // Auto-backup existing file before overwriting + compute diff
+        try {
+          await access(path);
+          const oldContent = await readFile(path, "utf-8");
+          await copyFile(path, path + ".bak");
+          try {
+            const oldFile = ExcalidrawFileSchema.parse(JSON.parse(oldContent));
+            const summary = computeChangeSummary(oldFile.elements, elements);
+            if (summary) result.changeSummary = summary;
+          } catch { /* old file unparseable — skip diff */ }
+        } catch { /* file doesn't exist yet — no backup needed */ }
+
+        await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
+        result.filePath = path;
+        filePaths.push(path);
+      }
+
+      if (format === "url") {
+        const { uploadToExcalidraw } = await import("./upload.js");
+        result.url = await uploadToExcalidraw(JSON.stringify(excalidrawJson));
+      }
+
+      if (format === "png") {
+        const { renderPngLocal } = await import("./png.js");
+        const pngPath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "") + ".png";
+        const pngData = await renderPngLocal(elements, pngPath);
+        if (pngData) {
+          result.pngBase64 = pngData;
+          result.filePath = pngPath;
+          filePaths.push(pngPath);
+        } else {
+          throw new Error("PNG export requires puppeteer. Install it with: npm install puppeteer");
+        }
+      }
+
+      if (format === "svg") {
+        const { renderSvgLocal } = await import("./png.js");
+        const svgPath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "") + ".svg";
+        const svgData = await renderSvgLocal(elements, svgPath);
+        if (svgData) {
+          result.svgString = svgData;
+          result.filePath = svgPath;
+          filePaths.push(svgPath);
+        } else {
+          throw new Error("SVG export requires puppeteer. Install it with: npm install puppeteer");
+        }
+      }
+    }
+
+    // Write sidecar .drawmode.ts for any format that writes to disk
+    if (opts?.sourceCode && filePaths.length > 0) {
+      const { writeFile, access, copyFile } = await import("node:fs/promises");
+      const basePath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "");
+      const sidecarPath = basePath + ".drawmode.ts";
       try {
-        await access(path);
-        const oldContent = await readFile(path, "utf-8");
-        await copyFile(path, path + ".bak");
-        try {
-          const oldFile = ExcalidrawFileSchema.parse(JSON.parse(oldContent));
-          const summary = computeChangeSummary(oldFile.elements, elements);
-          if (summary) result.changeSummary = summary;
-        } catch { /* old file unparseable — skip diff */ }
-      } catch { /* file doesn't exist yet — no backup needed */ }
-
-      await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
-      result.filePath = path;
-
-      // Write sidecar .drawmode.ts if source code provided
-      if (opts?.sourceCode && path.endsWith(".excalidraw")) {
-        const sidecarPath = path.replace(/\.excalidraw$/, ".drawmode.ts");
-        try {
-          await access(sidecarPath);
-          await copyFile(sidecarPath, sidecarPath + ".bak");
-        } catch { /* no existing sidecar */ }
-        await writeFile(sidecarPath, opts.sourceCode);
-      }
+        await access(sidecarPath);
+        await copyFile(sidecarPath, sidecarPath + ".bak");
+      } catch { /* no existing sidecar */ }
+      await writeFile(sidecarPath, opts.sourceCode);
     }
 
-    if (format === "url") {
-      const { uploadToExcalidraw } = await import("./upload.js");
-      result.url = await uploadToExcalidraw(JSON.stringify(excalidrawJson));
-    }
-
-    if (format === "png") {
-      const { renderPngLocal } = await import("./png.js");
-      const pngPath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "") + ".png";
-      const pngData = await renderPngLocal(elements, pngPath);
-      if (pngData) {
-        result.pngBase64 = pngData;
-        result.filePath = pngPath;
-      } else {
-        throw new Error("PNG export requires puppeteer. Install it with: npm install puppeteer");
-      }
-    }
-
-    if (format === "svg") {
-      const { renderSvgLocal } = await import("./png.js");
-      const svgPath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "") + ".svg";
-      const svgData = await renderSvgLocal(elements, svgPath);
-      if (svgData) {
-        result.svgString = svgData;
-        result.filePath = svgPath;
-      } else {
-        throw new Error("SVG export requires puppeteer. Install it with: npm install puppeteer");
-      }
-    }
+    if (filePaths.length > 1) result.filePaths = filePaths;
 
     return result;
   }
@@ -1280,7 +1303,7 @@ export class Diagram {
         strokeWidth: co?.strokeWidth ?? 2,
         strokeStyle: edge.style,
         roughness: co?.roughness ?? 0,
-        roundness: isElbowed ? null : { type: 2 },
+        roundness: null,
         elbowed: isElbowed,
         opacity: co?.opacity ?? 100,
         angle: 0,
@@ -1305,21 +1328,31 @@ export class Diagram {
       if (edge.label && labelTextId) {
         const labelWidth = measureText(edge.label, co?.labelFontSize ?? 14, 1).width + 16;
         let labelX: number, labelY: number;
+        const labelPos = co?.labelPosition ?? "middle";
 
-        if (edgeRoute?.labelPos) {
+        if (edgeRoute?.labelPos && labelPos === "middle") {
           // Use Zig-computed label position (center-based, with collision avoidance)
           labelX = edgeRoute.labelPos.x - labelWidth / 2;
           labelY = edgeRoute.labelPos.y - 12;
         } else if (points.length >= 2) {
-          // Fallback: midpoint of longest segment
-          let bestLen = 0, bestSeg = 0;
-          for (let s = 0; s < points.length - 1; s++) {
-            const segDx = points[s + 1][0] - points[s][0];
-            const segDy = points[s + 1][1] - points[s][1];
-            const segLen = Math.abs(segDx) + Math.abs(segDy);
-            if (segLen > bestLen) { bestLen = segLen; bestSeg = s; }
+          // Pick segment based on labelPosition
+          let targetSeg: number;
+          if (labelPos === "start") {
+            targetSeg = 0;
+          } else if (labelPos === "end") {
+            targetSeg = points.length - 2;
+          } else {
+            // "middle": midpoint of longest segment
+            let bestLen = 0;
+            targetSeg = 0;
+            for (let s = 0; s < points.length - 1; s++) {
+              const segDx = points[s + 1][0] - points[s][0];
+              const segDy = points[s + 1][1] - points[s][1];
+              const segLen = Math.abs(segDx) + Math.abs(segDy);
+              if (segLen > bestLen) { bestLen = segLen; targetSeg = s; }
+            }
           }
-          const p1 = points[bestSeg], p2 = points[bestSeg + 1];
+          const p1 = points[targetSeg], p2 = points[targetSeg + 1];
           labelX = arrowX + (p1[0] + p2[0]) / 2;
           labelY = arrowY + (p1[1] + p2[1]) / 2 - 12;
         } else {
@@ -1474,7 +1507,7 @@ export class Diagram {
         ];
         if (allBounds.length === 0) continue;
 
-        const padding = 30;
+        const padding = group.opts?.padding ?? 30;
         const { minX, minY, maxX, maxY } = computeNodeBounds(allBounds);
         gx = minX - padding;
         gy = minY - padding - 20;
@@ -1485,18 +1518,22 @@ export class Diagram {
       // Store computed bounds so parent groups can reference them
       groupBoundsMap.set(groupId, { id: groupId, x: gx, y: gy, width: gw, height: gh });
 
+      const grpStrokeColor = group.opts?.strokeColor ?? "#868e96";
+      const grpStrokeStyle = group.opts?.strokeStyle ?? "dashed";
+      const grpOpacity = group.opts?.opacity ?? 60;
+
       elements.push({
         id: groupId,
         type: "rectangle",
         x: gx, y: gy,
         width: gw, height: gh,
         backgroundColor: "transparent",
-        strokeColor: "#868e96",
+        strokeColor: grpStrokeColor,
         fillStyle: "solid",
         strokeWidth: 1,
-        strokeStyle: "dashed",
+        strokeStyle: grpStrokeStyle,
         roughness: 0,
-        opacity: 60,
+        opacity: grpOpacity,
         angle: 0,
         roundness: { type: 3 },
         boundElements: null,
@@ -1525,12 +1562,12 @@ export class Diagram {
         containerId: null,
         originalText: group.label,
         autoResize: true,
-        strokeColor: "#868e96",
+        strokeColor: grpStrokeColor,
         backgroundColor: "transparent",
         fillStyle: "solid",
         strokeWidth: 1,
         roughness: 0,
-        opacity: 60,
+        opacity: grpOpacity,
         angle: 0,
         groupIds: [],
         frameId: null,

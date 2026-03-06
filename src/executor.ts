@@ -38,7 +38,7 @@ export async function executeCode(
     class ConfiguredDiagram extends Diagram {
       override async render(opts?: RenderOpts): Promise<RenderResult> {
         const merged = { ...mergedOpts, ...opts };
-        if (formatMap && merged.format && merged.format in formatMap) {
+        if (formatMap && typeof merged.format === "string" && merged.format in formatMap) {
           merged.format = formatMap[merged.format] as RenderOpts["format"];
         }
         return super.render(merged);

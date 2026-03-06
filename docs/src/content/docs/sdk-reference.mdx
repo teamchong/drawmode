@@ -59,10 +59,11 @@ d.setDirection("LR");  // switch to left-to-right
 
 ### `addBox(label, opts?)`
 
-Add a rectangle element. Returns the element ID.
+Add a rectangle element. Returns the element ID. Labels support `\n` for line breaks — the shape auto-sizes to fit.
 
 ```typescript
 const id = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
+const id2 = d.addBox("Master DO\n(Single Writer)", { color: "storage" }); // multi-line
 ```
 
 ### `addEllipse(label, opts?)`
@@ -117,7 +118,7 @@ const id = d.addLine([[0, 0], [200, 100]], {
 
 ## Grouping
 
-### `addGroup(label, children)`
+### `addGroup(label, children, opts?)`
 
 Group elements with a dashed boundary. Returns the group ID.
 
@@ -125,7 +126,16 @@ Group elements with a dashed boundary. Returns the group ID.
 const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
 const cache = d.addBox("Redis", { row: 1, col: 1, color: "cache" });
 d.addGroup("Data Layer", [db, cache]);
+d.addGroup("VPC", [svc1, svc2], { padding: 50, strokeColor: "#e03131" });
 ```
+
+**Group options:**
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `padding` | `number` | `30` | Pixels of padding around children |
+| `strokeColor` | `string` | `#868e96` | Hex color for the group boundary |
+| `strokeStyle` | `"solid" \| "dashed" \| "dotted"` | `"dashed"` | Boundary line style |
+| `opacity` | `number` | `60` | Group boundary opacity (0-100) |
 
 ### `addFrame(name, children)`
 
@@ -151,6 +161,8 @@ Connect two elements with an arrow.
 d.connect(api, db, "queries");
 d.connect(api, cache, "reads", { style: "dashed" });
 d.connect(a, b, "flow", { startArrowhead: "dot", endArrowhead: "triangle" });
+d.connect(a, b, "near source", { labelPosition: "start" });
+d.connect(a, b, "near target", { labelPosition: "end" });
 ```
 
 ## Editing Existing Diagrams
@@ -292,13 +304,14 @@ return d.render({ format: "url" });             // shareable URL
 return d.render({ format: "excalidraw", path: "out.excalidraw" }); // write file
 return d.render({ format: "png", path: "out.png" });  // PNG image
 return d.render({ format: "svg", path: "out.svg" });  // SVG markup
+return d.render({ format: ["excalidraw", "svg"] });   // both formats at once
 ```
 
 **Render options:**
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `format` | `"excalidraw" \| "url" \| "png" \| "svg"` | `"excalidraw"` | Output format |
-| `path` | `string` | — | File path to write output |
+| `format` | `string \| string[]` | `"excalidraw"` | Output format(s). Pass an array for multiple outputs. |
+| `path` | `string` | — | Base file path (extensions derived per format) |
 
 **Return type (`RenderResult`):**
 | Field | Type | Description |
@@ -306,8 +319,25 @@ return d.render({ format: "svg", path: "out.svg" });  // SVG markup
 | `json` | `object` | Raw Excalidraw JSON |
 | `url` | `string?` | excalidraw.com shareable link |
 | `filePath` | `string?` | Local file path if written |
+| `filePaths` | `string[]?` | All file paths written (multi-format) |
 | `pngBase64` | `string?` | Base64-encoded PNG (format="png") |
 | `svgString` | `string?` | SVG markup string (format="svg") |
+
+A `.drawmode.ts` sidecar file is always written alongside any file output, preserving the source code for future iteration.
+
+## Grid Layout
+
+Nodes placed with `row` and `col` are positioned on a grid with these constants:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| Column spacing | 280px | Horizontal distance between columns |
+| Row spacing | 220px | Vertical distance between rows |
+| Base position | (100, 100) | Top-left starting position |
+| Default shape width | 180px | Minimum width (auto-expands for long labels) |
+| Default shape height | 80px | Height (+24px per additional `\n` line) |
+
+For precise control, use `x` and `y` in `ShapeOpts` to bypass the grid entirely.
 
 ## Type Reference
 
@@ -354,6 +384,7 @@ Options for `connect()`:
 | `endArrowhead` | `Arrowhead` | `"arrow"` | End arrowhead type |
 | `elbowed` | `boolean` | `true` | Use elbow routing |
 | `labelFontSize` | `number` | — | Label font size |
+| `labelPosition` | `"start" \| "middle" \| "end"` | `"middle"` | Where to place the edge label along the arrow |
 | `customData` | `Record<string, unknown> \| null` | — | Arbitrary metadata |
 
 ### `Arrowhead`

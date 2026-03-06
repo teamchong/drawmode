@@ -94,15 +94,22 @@ return d.render({ path: "diagram.excalidraw" });
 
 Prefer editing the .drawmode.ts source over fromFile() when a sidecar exists.
 
-Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omitted.
-Use x/y for absolute pixel positioning (bypasses grid).`,
+Grid layout: row 0 is top, col 0 is left. Spacing: 280px between columns, 220px between rows. Elements auto-position if row/col omitted.
+Use x/y for absolute pixel positioning (bypasses grid).
+Labels support \\n for line breaks — e.g. addBox("Master DO\\n(Single Writer)").
+Edge labels support labelPosition: "start" | "middle" (default) | "end" in ConnectOpts.
+Multi-format: pass format as an array for multiple outputs — e.g. render({ format: ["excalidraw", "svg"] }).
+A .drawmode.ts sidecar file is always written alongside any file output for future iteration.`,
     {
       code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
-      format: z.enum(["excalidraw", "url", "png", "svg"]).default("excalidraw").describe("Output format"),
-      path: z.string().optional().describe("File path for .excalidraw output"),
+      format: z.union([
+        z.enum(["excalidraw", "url", "png", "svg"]),
+        z.array(z.enum(["excalidraw", "url", "png", "svg"])),
+      ]).default("excalidraw").describe("Output format. Pass an array like [\"excalidraw\", \"svg\"] for multiple outputs."),
+      path: z.string().optional().describe("File path for output (base name; extensions derived per format)"),
     },
     async ({ code, format, path }) => {
-      const { result, error } = await executeCode(code, { format, path });
+      const { result, error } = await executeCode(code, { format: format as any, path });
 
       if (error) {
         return {
@@ -116,22 +123,25 @@ Use x/y for absolute pixel positioning (bypasses grid).`,
       // - excalidraw format: just the file path
       const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 
+      const formats = Array.isArray(format) ? format : [format];
+
       if (result.pngBase64) {
         parts.push({ type: "image" as const, data: result.pngBase64, mimeType: "image/png" });
-        if (result.filePath) {
-          parts.push({ type: "text" as const, text: result.filePath });
-        }
-      } else if (format === "url" && result.url) {
+      }
+
+      if (result.url) {
         parts.push({ type: "text" as const, text: result.url });
-      } else if (result.filePath) {
-        let text = result.filePath;
-        if (format === "excalidraw" && result.filePath.endsWith(".excalidraw")) {
-          const sidecarPath = result.filePath.replace(/\.excalidraw$/, ".drawmode.ts");
+      }
+
+      // Report all written file paths
+      const allPaths = result.filePaths ?? (result.filePath ? [result.filePath] : []);
+      for (const fp of allPaths) {
+        let text = fp;
+        if (fp.endsWith(".excalidraw")) {
+          const sidecarPath = fp.replace(/\.excalidraw$/, ".drawmode.ts");
           text += ` (source: ${sidecarPath})`;
         }
         parts.push({ type: "text" as const, text });
-      } else if (result.url) {
-        parts.push({ type: "text" as const, text: result.url });
       }
 
       // Add stats summary so users know what was generated

@@ -49,6 +49,7 @@ interface ConnectOpts {
   endArrowhead?: Arrowhead;              // default "arrow"
   elbowed?: boolean;                     // default true
   labelFontSize?: number;
+  labelPosition?: "start" | "middle" | "end";  // where to place the edge label (default "middle")
   customData?: Record<string, unknown> | null; // arbitrary metadata
 }
 
@@ -87,7 +88,12 @@ declare class Diagram {
   }): string;
 
   /** Group elements with a dashed boundary. Returns group ID. */
-  addGroup(label: string, children: string[]): string;
+  addGroup(label: string, children: string[], opts?: {
+    padding?: number;          // pixels around children (default 30)
+    strokeColor?: string;      // hex color for boundary
+    strokeStyle?: StrokeStyle; // default "dashed"
+    opacity?: number;          // 0-100 (default 60)
+  }): string;
 
   /** Add a native Excalidraw frame container. Returns frame ID. */
   addFrame(name: string, children: string[]): string;
@@ -138,10 +144,10 @@ declare class Diagram {
   /** Remove an edge between two nodes. Optional label disambiguates multi-edges. */
   removeEdge(from: string, to: string, label?: string): void;
 
-  /** Render the diagram. Always return this from your code. */
+  /** Render the diagram. Always return this from your code. Pass format as array for multi-output. */
   render(opts?: {
-    format?: "excalidraw" | "url" | "png" | "svg";
+    format?: "excalidraw" | "url" | "png" | "svg" | ("excalidraw" | "url" | "png" | "svg")[];
     path?: string;
-  }): Promise<{ json: object; url?: string; filePath?: string; pngBase64?: string }>;
+  }): Promise<{ json: object; url?: string; filePath?: string; filePaths?: string[]; pngBase64?: string }>;
 }
 `;
