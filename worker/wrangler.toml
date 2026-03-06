@@ -6,5 +6,8 @@ compatibility_flags = ["nodejs_compat", "unsafe_eval"]
 [browser]
 binding = "MYBROWSER"
 
+[wasm_modules]
+DRAWMODE_WASM = "../wasm/zig-out/bin/drawmode.wasm"
+
 [build]
 command = "cd .. && pnpm build"

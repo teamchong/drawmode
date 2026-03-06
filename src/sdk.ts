@@ -12,7 +12,7 @@ import type {
 } from "./types.js";
 import { COLOR_PALETTE, ExcalidrawFileSchema } from "./types.js";
 import {
-  validateElements, isWasmLoaded,
+  validateElements, isWasmLoaded, loadWasm,
   layoutGraphWasm,
   type EdgeRoute,
   type GroupBounds,
@@ -1979,6 +1979,8 @@ export class Diagram {
   }
 
   private async layoutNodesWasm(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] } | null> {
+    // Auto-load WASM on first use (ensures Graphviz layout works for direct SDK imports)
+    if (!isWasmLoaded()) await loadWasm();
     const graphNodes = Array.from(this.nodes.values()).filter(
       n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond",
     );

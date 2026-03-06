@@ -9,7 +9,7 @@
  * - GET /health — Health check
  * - POST /proxy/excalidraw — Proxy for excalidraw.com upload (no CORS on their API)
  *
- * Note: No WASM support in Worker — uses TS-only grid layout via the SDK.
+ * WASM (Graphviz layout + validation) is loaded from the DRAWMODE_WASM binding.
  * PNG export uses Cloudflare Browser Rendering (puppeteer) when available.
  */
 
@@ -19,10 +19,12 @@ import { z } from "zod";
 import { buildRenderHTML } from "../src/png.js";
 import { SDK_TYPES } from "../src/sdk-types.js";
 import { executeCode } from "../src/executor.js";
+import { loadWasm, isWasmLoaded } from "../src/layout.js";
 import puppeteer from "@cloudflare/puppeteer";
 
 interface Env {
   MYBROWSER: Fetcher;
+  DRAWMODE_WASM: WebAssembly.Module;
 }
 
 /** Worker has no filesystem — coerce excalidraw format to url */
@@ -131,7 +133,7 @@ Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omit
     async () => ({
       content: [{
         type: "text" as const,
-        text: `drawmode — Code Mode MCP for Excalidraw diagrams (Worker mode)\n\nColor presets: frontend, backend, database, storage, ai, external, orchestration, queue, cache, users\n\n${SDK_TYPES}\n\nWASM layout: not available (Worker mode)`,
+        text: `drawmode — Code Mode MCP for Excalidraw diagrams (Worker mode)\n\nColor presets: frontend, backend, database, storage, ai, external, orchestration, queue, cache, users\n\n${SDK_TYPES}\n\nWASM layout: ${isWasmLoaded() ? "active (Graphviz + validation)" : "not loaded"}`,
       }],
     }),
   );
@@ -150,10 +152,15 @@ function withCors(response: Response): Response {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // Load WASM on first request (Graphviz layout + validation)
+    if (!isWasmLoaded() && env.DRAWMODE_WASM) {
+      await loadWasm(env.DRAWMODE_WASM);
+    }
+
     const url = new URL(request.url);
 
     if (url.pathname === "/health") {
-      return Response.json({ status: "ok", service: "drawmode", mode: "worker" });
+      return Response.json({ status: "ok", service: "drawmode", mode: "worker", wasm: isWasmLoaded() });
     }
 
     // CORS preflight — must be handled before MCP transport (which rejects OPTIONS as 405)

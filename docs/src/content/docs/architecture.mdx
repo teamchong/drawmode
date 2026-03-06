@@ -10,7 +10,7 @@ drawmode exposes a single `draw` MCP tool. The LLM writes TypeScript code agains
 1. LLM receives one tool (`draw`) with SDK type definitions (~100 lines)
 2. LLM writes code using the `Diagram` class
 3. `executor.ts` runs code via `new Function("Diagram", code)` with a `ConfiguredDiagram` subclass
-4. Graphviz (`@hpcc-js/wasm-graphviz`) handles layout positioning and arrow routing via the `dot` engine
+4. Graphviz (statically linked in Zig WASM) handles layout positioning and arrow routing via the `dot` engine
 5. Zig WASM handles validation (layout fallback if Graphviz unavailable)
 6. Output: `.excalidraw` file, excalidraw.com URL, `.png` file, or `.svg` file
 
@@ -44,7 +44,7 @@ drawmode/
 
 ## Layout Engine: Graphviz
 
-The primary layout engine is Graphviz via `@hpcc-js/wasm-graphviz` — the real Graphviz C library compiled to WASM.
+The primary layout engine is Graphviz — the C library is statically linked into the Zig WASM module (`drawmode.wasm`).
 
 - **`dot` layout**: Layered graph layout (Sugiyama algorithm) with proper crossing minimization
 - **`splines=ortho`**: Orthogonal edge routing (90-degree elbows matching Excalidraw style), falls back to `splines=polyline` if ortho fails
@@ -111,7 +111,6 @@ PNG and SVG export uses headless Chrome (puppeteer) to load the Excalidraw libra
 | Package | Purpose |
 |---------|---------|
 | `@modelcontextprotocol/sdk` | MCP protocol (McpServer, transports) |
-| `@hpcc-js/wasm-graphviz` | Graphviz C library compiled to WASM |
 | `zod` | Schema validation for MCP tool parameters |
 | `puppeteer` (optional) | Headless Chrome for PNG/SVG export |
 

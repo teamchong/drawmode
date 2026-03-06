@@ -1,6 +1,6 @@
 # drawmode
 
-Code Mode MCP server for generating Excalidraw architecture diagrams. Instead of having LLMs write raw Excalidraw JSON (error-prone), they write TypeScript code against a typed SDK. Graphviz (via `@hpcc-js/wasm-graphviz`) handles graph layout with proper crossing minimization and orthogonal edge routing. A Zig WASM module handles validation.
+Code Mode MCP server for generating Excalidraw architecture diagrams. Instead of having LLMs write raw Excalidraw JSON (error-prone), they write TypeScript code against a typed SDK. Graphviz (statically linked in a Zig WASM module) handles graph layout with proper crossing minimization and orthogonal edge routing.
 
 ## Features
 
@@ -229,7 +229,7 @@ drawmode/
 
 ### Layout Engine
 
-**Graphviz** (via `@hpcc-js/wasm-graphviz`) is the primary layout engine — the real Graphviz C library compiled to WASM:
+**Graphviz** (C library statically linked in the Zig WASM module) is the primary layout engine:
 
 - **Sugiyama algorithm** — proper layered graph layout with crossing minimization
 - **Orthogonal edge routing** (`splines=ortho`) — 90-degree elbows matching Excalidraw style

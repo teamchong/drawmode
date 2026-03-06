@@ -77,64 +77,89 @@ const WasmLayoutOutputSchema = z.object({
   })).optional(),
 });
 
-export async function loadWasm(wasmPath?: string): Promise<void> {
-  try {
-    const { readFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
-    const dir = await getDirname();
-    const path = wasmPath ?? join(dir, "..", "wasm", "zig-out", "bin", "drawmode.wasm");
-    const bytes = await readFile(path);
-    // WASI imports — the WASM module targets wasm32-wasi and requires these syscalls.
-    // We provide minimal implementations since only layout computation is used (no I/O).
-    const ref: { memory: WebAssembly.Memory | null } = { memory: null };
-    const wasiImports = {
-      wasi_snapshot_preview1: {
-        environ_get: () => 0,
-        environ_sizes_get: (_countPtr: number, _sizePtr: number) => {
-          if (ref.memory) {
-            const view = new DataView(ref.memory.buffer);
-            view.setUint32(_countPtr, 0, true);
-            view.setUint32(_sizePtr, 0, true);
-          }
-          return 0;
-        },
-        clock_time_get: (_id: number, _precision: bigint, resultPtr: number) => {
-          if (ref.memory) {
-            new DataView(ref.memory.buffer).setBigUint64(resultPtr, BigInt(0), true);
-          }
-          return 0;
-        },
-        fd_close: () => 0,
-        fd_fdstat_get: () => 0,
-        fd_filestat_get: () => 8, // EBADF
-        fd_prestat_get: () => 8, // EBADF — no preopened dirs
-        fd_prestat_dir_name: () => 8,
-        fd_pwrite: () => 0,
-        fd_read: () => 0,
-        fd_seek: () => 0,
-        fd_write: (_fd: number, _iovs: number, _iovsLen: number, nwrittenPtr: number) => {
-          if (ref.memory) {
-            new DataView(ref.memory.buffer).setUint32(nwrittenPtr, 0, true);
-          }
-          return 0;
-        },
-        path_filestat_get: () => 8, // EBADF
-        proc_exit: (code: number) => { throw new WasiExit(code); },
+/** WASI shim — minimal syscall implementations for layout-only WASM. */
+function makeWasiImports(memRef: { memory: WebAssembly.Memory | null }) {
+  return {
+    wasi_snapshot_preview1: {
+      environ_get: () => 0,
+      environ_sizes_get: (_countPtr: number, _sizePtr: number) => {
+        if (memRef.memory) {
+          const view = new DataView(memRef.memory.buffer);
+          view.setUint32(_countPtr, 0, true);
+          view.setUint32(_sizePtr, 0, true);
+        }
+        return 0;
       },
-    };
-    const { instance } = await WebAssembly.instantiate(bytes, wasiImports);
-    ref.memory = (instance.exports as Record<string, unknown>).memory as WebAssembly.Memory;
-    // Initialize WASI C runtime (libc, malloc, etc.)
-    // _start calls main() then proc_exit(). We throw from proc_exit to break out.
-    const start = (instance.exports as Record<string, unknown>)._start as (() => void) | undefined;
-    if (start) {
-      try { start(); } catch (e) {
-        if (!(e instanceof WasiExit)) throw e;
-      }
+      clock_time_get: (_id: number, _precision: bigint, resultPtr: number) => {
+        if (memRef.memory) {
+          new DataView(memRef.memory.buffer).setBigUint64(resultPtr, BigInt(0), true);
+        }
+        return 0;
+      },
+      fd_close: () => 0,
+      fd_fdstat_get: () => 0,
+      fd_filestat_get: () => 8,
+      fd_prestat_get: () => 8,
+      fd_prestat_dir_name: () => 8,
+      fd_pwrite: () => 0,
+      fd_read: () => 0,
+      fd_seek: () => 0,
+      fd_write: (_fd: number, _iovs: number, _iovsLen: number, nwrittenPtr: number) => {
+        if (memRef.memory) {
+          new DataView(memRef.memory.buffer).setUint32(nwrittenPtr, 0, true);
+        }
+        return 0;
+      },
+      path_filestat_get: () => 8,
+      proc_exit: (code: number) => { throw new WasiExit(code); },
+    },
+  };
+}
+
+/** Initialize WASM instance and wire up exports. */
+function wireInstance(instance: WebAssembly.Instance, ref: { memory: WebAssembly.Memory | null }): void {
+  ref.memory = (instance.exports as Record<string, unknown>).memory as WebAssembly.Memory;
+  const start = (instance.exports as Record<string, unknown>)._start as (() => void) | undefined;
+  if (start) {
+    try { start(); } catch (e) {
+      if (!(e instanceof WasiExit)) throw e;
     }
-    wasmInstance = instance.exports as unknown as WasmLayoutExports;
+  }
+  wasmInstance = instance.exports as unknown as WasmLayoutExports;
+}
+
+/** Initialize WASM from compiled module or bytes. */
+async function initWasm(source: BufferSource | WebAssembly.Module): Promise<void> {
+  const ref: { memory: WebAssembly.Memory | null } = { memory: null };
+  const wasiImports = makeWasiImports(ref);
+  if (source instanceof WebAssembly.Module) {
+    const instance = await WebAssembly.instantiate(source, wasiImports);
+    wireInstance(instance, ref);
+  } else {
+    const result = await WebAssembly.instantiate(source, wasiImports) as unknown as { instance: WebAssembly.Instance };
+    wireInstance(result.instance, ref);
+  }
+}
+
+/**
+ * Load the WASM module.
+ * - No args: reads from filesystem (local Node.js)
+ * - WebAssembly.Module: instantiates directly (Cloudflare Worker)
+ * - BufferSource: compiles and instantiates (any runtime)
+ */
+export async function loadWasm(source?: string | WebAssembly.Module | BufferSource): Promise<void> {
+  try {
+    if (source instanceof WebAssembly.Module || source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
+      await initWasm(source);
+    } else {
+      const { readFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const dir = await getDirname();
+      const path = source ?? join(dir, "..", "wasm", "zig-out", "bin", "drawmode.wasm");
+      const bytes = await readFile(path);
+      await initWasm(bytes);
+    }
   } catch {
-    // WASM not available — fall back to TS layout
     wasmInstance = null;
   }
 }
