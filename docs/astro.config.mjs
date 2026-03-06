@@ -18,6 +18,7 @@ export default defineConfig({
         { label: "Overview", slug: "index" },
         { label: "Getting Started", slug: "getting-started" },
         { label: "Examples", slug: "examples" },
+        { label: "Iterating on Diagrams", slug: "iterating" },
         { label: "Comparison", slug: "comparison" },
         { label: "SDK Reference", slug: "sdk-reference" },
         { label: "Color Presets", slug: "color-presets" },

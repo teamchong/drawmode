@@ -1,0 +1,146 @@
+---
+title: Iterating on Diagrams
+description: How drawmode helps LLMs refine and edit diagrams across multiple turns
+---
+
+drawmode includes several features designed to help LLMs iterate on diagrams — editing existing work, tracking changes, and getting feedback on what was modified.
+
+## Two Editing Workflows
+
+### Workflow 1: Sidecar Source (Recommended)
+
+When you render to `.excalidraw`, drawmode saves the TypeScript source alongside it as a `.drawmode.ts` sidecar file:
+
+```
+diagram.excalidraw       ← Excalidraw JSON (for viewing)
+diagram.drawmode.ts      ← TypeScript source (for editing)
+```
+
+To iterate, the LLM reads the `.drawmode.ts` file, modifies the code, and re-executes. This is the preferred workflow because the TypeScript source is always easier to modify than binary Excalidraw JSON.
+
+### Workflow 2: fromFile (No Source Available)
+
+When no sidecar exists, `fromFile()` reconstructs a Diagram from raw Excalidraw JSON:
+
+```typescript
+const d = await Diagram.fromFile("diagram.excalidraw");
+const ids = d.findByLabel("Old Service");
+if (ids.length > 0) d.updateNode(ids[0], { label: "New Service", color: "ai" });
+d.removeNode(d.findByLabel("Deprecated")[0]);
+return d.render({ path: "diagram.excalidraw" });
+```
+
+This parses all nodes, edges, groups, and frames from the file, letting the LLM query and modify them programmatically.
+
+## Querying the Graph
+
+Find and inspect existing elements before modifying them:
+
+```typescript
+// Search by label (substring match)
+const ids = d.findByLabel("API");
+
+// Exact match
+const ids = d.findByLabel("PostgreSQL", { exact: true });
+
+// Get all node IDs
+const allNodes = d.getNodes();
+
+// Get all edges
+const allEdges = d.getEdges();
+// → [{ from: "n1", to: "n2", label: "queries" }, ...]
+
+// Inspect a specific node
+const info = d.getNode(id);
+// → { label, type, width, height, backgroundColor, strokeColor, row, col }
+```
+
+## Modifying Elements
+
+### Update Nodes
+
+Change any property on an existing node:
+
+```typescript
+d.updateNode(id, { label: "API Gateway v2", color: "ai" });
+d.updateNode(id, { width: 200, strokeStyle: "dashed" });
+d.updateNode(id, { x: 300, y: 100 }); // absolute positioning
+```
+
+### Update Edges
+
+Modify edge properties. Use `matchLabel` to disambiguate when multiple edges connect the same pair:
+
+```typescript
+d.updateEdge(apiId, dbId, { label: "writes", style: "dashed" });
+d.updateEdge(apiId, cacheId, { strokeColor: "#e03131" }, "reads");
+```
+
+### Remove Elements
+
+Delete nodes (and their connected edges) or specific edges:
+
+```typescript
+d.removeNode(deprecatedId);          // also removes all connected edges
+d.removeEdge(apiId, dbId);           // remove first matching edge
+d.removeEdge(apiId, dbId, "reads");  // remove by label
+d.removeGroup(groupId);              // remove group, keep children
+d.removeFrame(frameId);              // remove frame, keep children
+```
+
+## Change Summary
+
+When overwriting an existing `.excalidraw` file, drawmode automatically computes a diff and reports what changed:
+
+```
++ Added: "Cache Layer" (rectangle), "Load Balancer" (rectangle)
+- Removed: "Old Service" (rectangle)
+~ Modified: "API" → "API Gateway v2"
+~ Moved: "Database"
++ 2 edge(s) added
+- 1 edge(s) removed
+  Unchanged: 8 node(s)
+```
+
+This summary is returned in the MCP tool response, helping the LLM verify its changes and decide if further iteration is needed.
+
+A `.bak` backup is also created automatically before overwriting, so changes are always reversible.
+
+## Diagram Statistics
+
+Every render includes statistics in the response:
+
+```
+12 nodes, 15 edges, 3 groups
+```
+
+This gives the LLM a quick sanity check — if the count is unexpectedly low or high, something may have gone wrong.
+
+## Validation Warnings
+
+The Zig WASM validator checks rendered output for structural issues. Warnings are surfaced in the MCP response:
+
+```
+⚠ Element "n3" has no connections
+⚠ Arrow "e2" has invalid binding
+```
+
+These guide the LLM to fix problems in the next iteration.
+
+## Mermaid Import
+
+As an alternative starting point, `fromMermaid()` converts Mermaid syntax into a Diagram:
+
+```typescript
+const d = Diagram.fromMermaid(`
+  graph TD
+    A[API Gateway] --> B[Auth Service]
+    A --> C[Order Service]
+    B --> D[(Database)]
+`);
+// Now modify using the full SDK
+d.updateNode(d.findByLabel("API Gateway")[0], { color: "backend" });
+return d.render();
+```
+
+Supported Mermaid features: `graph TD/LR/RL/BT`, node shapes (`[]`, `{}`, `(())`, `[()]`), edges (`-->`, `---`, `-..->`, `==>`), edge labels (`|label|`), subgraphs, and chained edges.

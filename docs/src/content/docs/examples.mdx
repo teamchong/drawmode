@@ -64,14 +64,14 @@ return d.render();
 
 ## Data Pipeline
 
-A left-to-right streaming data pipeline from Kafka through Flink to ClickHouse and Grafana. Uses `direction: "LR"` for horizontal flow.
+A streaming data pipeline from Kafka through Flink to ClickHouse and Grafana. Each stage flows top-to-bottom with labeled connections.
 
 ```typescript
-const d = new Diagram({ direction: "LR" });
+const d = new Diagram();
 const kafka = d.addBox("Kafka", { row: 0, col: 0, color: "queue" });
-const flink = d.addBox("Flink", { row: 0, col: 1, color: "backend" });
-const clickhouse = d.addBox("ClickHouse", { row: 0, col: 2, color: "database" });
-const grafana = d.addBox("Grafana", { row: 0, col: 3, color: "frontend" });
+const flink = d.addBox("Flink", { row: 1, col: 0, color: "backend" });
+const clickhouse = d.addBox("ClickHouse", { row: 2, col: 0, color: "database" });
+const grafana = d.addBox("Grafana", { row: 3, col: 0, color: "frontend" });
 
 d.connect(kafka, flink, "stream");
 d.connect(flink, clickhouse, "write");
@@ -104,15 +104,15 @@ return d.render();
 
 ## CI/CD Pipeline
 
-A horizontal CI/CD pipeline from GitHub through build, test, staging, to production. Each stage uses a different color to indicate its role.
+A CI/CD pipeline from GitHub through build, test, staging, to production. Each stage uses a different color to indicate its role.
 
 ```typescript
-const d = new Diagram({ direction: "LR" });
+const d = new Diagram();
 const github = d.addBox("GitHub", { row: 0, col: 0, color: "external" });
-const build = d.addBox("Build", { row: 0, col: 1, color: "backend" });
-const test = d.addBox("Test", { row: 0, col: 2, color: "ai" });
-const staging = d.addBox("Staging", { row: 0, col: 3, color: "cache" });
-const prod = d.addBox("Production", { row: 0, col: 4, color: "database" });
+const build = d.addBox("Build", { row: 1, col: 0, color: "backend" });
+const test = d.addBox("Test", { row: 2, col: 0, color: "ai" });
+const staging = d.addBox("Staging", { row: 3, col: 0, color: "cache" });
+const prod = d.addBox("Production", { row: 4, col: 0, color: "database" });
 
 d.connect(github, build, "push");
 d.connect(build, test, "artifacts");
