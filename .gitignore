@@ -5,6 +5,7 @@ zig-cache/
 .zig-cache/
 *.wasm
 *.o
+.build-hash
 !wasm/src/
 .DS_Store
 

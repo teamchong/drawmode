@@ -175,10 +175,17 @@ const graphviz_c_flags = [_][]const u8{
 };
 
 pub fn build(b: *std.Build) void {
+    const enable_validation = b.option(bool, "enable_validation", "Include element validation export (default: true)") orelse true;
+    const enable_compression = b.option(bool, "enable_compression", "Include zlib compression export (default: true)") orelse true;
+
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .wasi,
     });
+
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "enable_validation", enable_validation);
+    build_options.addOption(bool, "enable_compression", enable_compression);
 
     const wasm = b.addExecutable(.{
         .name = "drawmode",
@@ -189,6 +196,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    wasm.root_module.addOptions("build_options", build_options);
     wasm.entry = .disabled;
     wasm.rdynamic = true;
     wasm.export_memory = true;
@@ -247,6 +255,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
         }),
     });
+    tests.root_module.addOptions("build_options", build_options);
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);

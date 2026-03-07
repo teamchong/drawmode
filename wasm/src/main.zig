@@ -1,8 +1,9 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const layout = @import("layout.zig");
 const arrows = @import("arrows.zig");
-const validate_mod = @import("validate.zig");
-const compress_mod = @import("compress.zig");
+const validate_mod = if (build_options.enable_validation) @import("validate.zig") else struct {};
+const compress_mod = if (build_options.enable_compression) @import("compress.zig") else struct {};
 
 /// Bump allocator backed by a fixed buffer (no imports needed for WASM).
 /// 4MB heap for element data and layout scratch.
@@ -61,12 +62,14 @@ export fn routeArrows(
 }
 
 /// Validate Excalidraw elements for structural correctness.
+/// Conditionally included via -Denable_validation (default: true).
 export fn validate(
     elem_ptr: [*]const u8,
     elem_len: usize,
     out_ptr: [*]u8,
     out_cap: usize,
 ) usize {
+    if (!build_options.enable_validation) return 0;
     const elem_slice = elem_ptr[0..elem_len];
     const out_slice = out_ptr[0..out_cap];
 
@@ -75,12 +78,14 @@ export fn validate(
 
 
 /// Compress data using zlib format (matching pako.deflate).
+/// Conditionally included via -Denable_compression (default: true).
 export fn zlibCompress(
     in_ptr: [*]const u8,
     in_len: usize,
     out_ptr: [*]u8,
     out_cap: usize,
 ) usize {
+    if (!build_options.enable_compression) return 0;
     const in_slice = in_ptr[0..in_len];
     const out_slice = out_ptr[0..out_cap];
 
