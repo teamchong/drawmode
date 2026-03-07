@@ -335,6 +335,53 @@ function resolveOverlaps(elements: ExcalidrawElement[], budget = 10): void {
 }
 
 /**
+ * Nudge text nodes that partially overlap box node edges.
+ * Skips text fully contained within a box (intentional content/descriptions).
+ * Only pushes text that straddles a box boundary.
+ */
+function resolveTextBoxOverlaps(positioned: Map<string, PositionedNode>, gap = 8, budget = 10): void {
+  const textNodes: PositionedNode[] = [];
+  const boxNodes: PositionedNode[] = [];
+  for (const n of positioned.values()) {
+    if (n.type === "text") textNodes.push(n);
+    else if (n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond") boxNodes.push(n);
+  }
+  if (textNodes.length === 0 || boxNodes.length === 0) return;
+
+  for (let iter = 0; iter < budget; iter++) {
+    let moved = false;
+    for (const t of textNodes) {
+      const tx = t.x ?? 0, ty = t.y ?? 0;
+      const tr = tx + t.width, tb = ty + t.height;
+      for (const b of boxNodes) {
+        const bx = b.x ?? 0, by = b.y ?? 0;
+        const br = bx + b.width, bb = by + b.height;
+        if (!rectsOverlap(tx, ty, t.width, t.height, bx, by, b.width, b.height, 0)) continue;
+        // Skip text fully inside the box (intentional content)
+        if (tx >= bx && ty >= by && tr <= br && tb <= bb) continue;
+        // Text partially overlaps box edge — push to nearest edge
+        const pushLeft = bx - gap - t.width - tx;
+        const pushRight = br + gap - tx;
+        const pushUp = by - gap - t.height - ty;
+        const pushDown = bb + gap - ty;
+        const candidates = [
+          { d: Math.abs(pushLeft), dx: pushLeft, dy: 0 },
+          { d: Math.abs(pushRight), dx: pushRight, dy: 0 },
+          { d: Math.abs(pushUp), dx: 0, dy: pushUp },
+          { d: Math.abs(pushDown), dx: 0, dy: pushDown },
+        ];
+        candidates.sort((a, c) => a.d - c.d);
+        t.x = tx + candidates[0].dx;
+        t.y = ty + candidates[0].dy;
+        moved = true;
+        break;
+      }
+    }
+    if (!moved) break;
+  }
+}
+
+/**
  * Resolve overlapping nodes in the grid fallback layout.
  * Nudges nodes that share the same cell to adjacent positions.
  */
@@ -630,7 +677,9 @@ export class Diagram {
           ?? el.startBinding?.elementId;
         const endId = (el.customData as Record<string, unknown> | undefined)?._to as string | undefined
           ?? el.endBinding?.elementId;
-        if (startId && endId) {
+        const isDrawmodeArrow = !!(el.customData as Record<string, unknown> | undefined)?._from;
+        if (startId && endId && isDrawmodeArrow) {
+          // Drawmode-generated arrow — reconstruct as edge for re-routing
           const labelId = (el.customData as Record<string, unknown> | undefined)?._labelId as string | undefined;
           const arrowLabel = labelId ? elemById.get(labelId) : textByContainer.get(el.id);
           d.edges.push({
@@ -650,8 +699,11 @@ export class Diagram {
             },
           });
         } else {
-          // Arrow without both bindings — passthrough
+          // External arrow (not drawmode-generated) — preserve original routing as passthrough.
+          // Also preserve its bound label text element.
           d.passthrough.push(el);
+          const boundLabel = textByContainer.get(el.id);
+          if (boundLabel) d.passthrough.push(boundLabel);
         }
       } else if (el.type === "text" && !el.containerId) {
         // Skip group label text elements (detected in pre-scan above)
@@ -1195,6 +1247,9 @@ export class Diagram {
 
     const elements: ExcalidrawElement[] = [];
     const { positioned, edgeRoutes, groupBounds } = await this.layoutNodes(warnings);
+
+    // Nudge text nodes that overlap with box nodes
+    resolveTextBoxOverlaps(positioned);
 
     // Nudge non-member nodes out of group bounding boxes (grid fallback only).
     // Graphviz clusters handle containment properly; grid layout can place

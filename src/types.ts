@@ -130,8 +130,8 @@ export interface ConnectOpts {
 
 const BindingSchema = z.object({
   elementId: z.string(),
-  focus: z.number(),
-  gap: z.number(),
+  focus: z.number().optional(),
+  gap: z.number().optional(),
 }).passthrough();
 
 export const ExcalidrawElementSchema = z.object({

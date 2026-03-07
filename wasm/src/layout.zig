@@ -170,7 +170,9 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
                 c.gviz_set_node_attr(graph, np, "pos", @ptrCast(&pos_buf));
             }
         }
-        // For nop2: positions are already set, skip overlap adjustment and spline routing
+        // For nop2: positions are already set, skip overlap adjustment and edge routing.
+        // Edge routing for pre-positioned graphs is handled by preserving original arrow
+        // paths from the source file (SDK passes them through unchanged).
         c.gviz_set_graph_attr(graph, "overlap", "true");
         c.gviz_set_graph_attr(graph, "splines", "none");
     }
@@ -369,6 +371,11 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
 
     w += copySlice(out[w..], "{\"nodes\":[");
 
+    // Store node bounding boxes for label-vs-node collision avoidance
+    const NodeBox = struct { cx: i32, cy: i32, hw: i32, hh: i32 };
+    var node_boxes: [MAX_NODES]NodeBox = undefined;
+    var node_box_count: usize = 0;
+
     // Extract node positions
     var first_node = true;
     var n_ptr = c.gviz_first_node(graph);
@@ -406,6 +413,17 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
                 if (in_node.abs_y) |ay| node_y = ay;
                 break;
             }
+        }
+
+        // Store node bounding box (center coords, half-dimensions)
+        if (node_box_count < MAX_NODES) {
+            node_boxes[node_box_count] = .{
+                .cx = node_x + @divTrunc(input_w, 2),
+                .cy = node_y + @divTrunc(input_h, 2),
+                .hw = @divTrunc(input_w, 2),
+                .hh = @divTrunc(input_h, 2),
+            };
+            node_box_count += 1;
         }
 
         if (!first_node) w += copySlice(out[w..], ",");
@@ -525,6 +543,51 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
             }
         }
         if (!shifted) break;
+    }
+
+    // Label-vs-node collision fix: push labels outside node bounding boxes.
+    // Graphviz places labels at edge midpoints which can land on top of nodes.
+    const NODE_LABEL_GAP: i32 = 16;
+    var node_pass: usize = 0;
+    while (node_pass < 10) : (node_pass += 1) {
+        var node_shifted = false;
+        for (0..edge_info_count) |i| {
+            if (!edge_infos[i].has_label) continue;
+            const lhw = @divTrunc(edge_infos[i].label_w, 2);
+            const lhh = @divTrunc(LABEL_H, 2);
+
+            for (node_boxes[0..node_box_count]) |nb| {
+                // Check if label bounding box overlaps node bounding box
+                const dx = absInt(edge_infos[i].label_x - nb.cx);
+                const dy = absInt(edge_infos[i].label_y - nb.cy);
+                const min_dx = lhw + nb.hw + NODE_LABEL_GAP;
+                const min_dy = lhh + nb.hh + NODE_LABEL_GAP;
+
+                if (dx < min_dx and dy < min_dy) {
+                    // Overlap detected — push label to nearest edge of node + gap
+                    const push_x = min_dx - dx; // how much to push on X
+                    const push_y = min_dy - dy; // how much to push on Y
+
+                    if (push_x < push_y) {
+                        // Push horizontally (less movement needed)
+                        if (edge_infos[i].label_x >= nb.cx) {
+                            edge_infos[i].label_x += push_x;
+                        } else {
+                            edge_infos[i].label_x -= push_x;
+                        }
+                    } else {
+                        // Push vertically
+                        if (edge_infos[i].label_y >= nb.cy) {
+                            edge_infos[i].label_y += push_y;
+                        } else {
+                            edge_infos[i].label_y -= push_y;
+                        }
+                    }
+                    node_shifted = true;
+                }
+            }
+        }
+        if (!node_shifted) break;
     }
 
     // Second pass: write edge JSON with label positions
