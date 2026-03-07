@@ -1990,6 +1990,15 @@ export class Diagram {
     );
     if (graphNodes.length === 0) return null;
 
+    // When ALL shape nodes have absolute x/y, skip Graphviz dot layout entirely.
+    // The dot engine hangs indefinitely on dense pre-positioned graphs (it still
+    // tries full Sugiyama ranking even when positions are predetermined).
+    // We place nodes at their absolute positions and compute simple edge routes.
+    const allAbsolute = graphNodes.every(n => n.absX !== undefined && n.absY !== undefined);
+    if (allAbsolute) {
+      return this.layoutAbsolutePositioned(graphNodes);
+    }
+
     // For LR/RL directions, swap row/col so Graphviz interprets rank constraints correctly.
     // Graphviz Sugiyama always treats "rank" as the primary axis (TB=vertical, LR=horizontal).
     // User-facing row/col are in TB space, so we swap them for LR/RL before passing to Graphviz.
@@ -2082,6 +2091,59 @@ export class Diagram {
       }
     }
     return result;
+  }
+
+  /** Layout for all-absolute-positioned graphs. Skips Graphviz (which hangs on dense
+   *  pre-positioned graphs) and computes simple orthogonal edge routes in TS. */
+  private layoutAbsolutePositioned(graphNodes: GraphNode[]): { positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] } {
+    const positioned = new Map<string, PositionedNode>();
+    for (const node of graphNodes) {
+      positioned.set(node.id, { ...node, x: node.absX!, y: node.absY! });
+    }
+    // Place text/line nodes at their absolute positions
+    for (const node of this.nodes.values()) {
+      if (!positioned.has(node.id)) {
+        positioned.set(node.id, { ...node, x: node.absX ?? 0, y: node.absY ?? 0 });
+      }
+    }
+
+    // Compute simple orthogonal edge routes (single elbow)
+    const edgeRoutes = new Map<string, EdgeRoute>();
+    const edgePairCounts = new Map<string, number>();
+    for (const edge of this.edges) {
+      const fromNode = positioned.get(edge.from);
+      const toNode = positioned.get(edge.to);
+      if (!fromNode || !toNode) continue;
+
+      const baseKey = `${edge.from}->${edge.to}`;
+      const pairIdx = edgePairCounts.get(baseKey) ?? 0;
+      edgePairCounts.set(baseKey, pairIdx + 1);
+      const key = pairIdx === 0 ? baseKey : `${baseKey}#${pairIdx}`;
+
+      const fx = (fromNode.x ?? 0), fy = (fromNode.y ?? 0);
+      const tx = (toNode.x ?? 0), ty = (toNode.y ?? 0);
+      const fcx = fx + fromNode.width / 2, fcy = fy + fromNode.height / 2;
+      const tcx = tx + toNode.width / 2, tcy = ty + toNode.height / 2;
+
+      // Simple routing: exit from bottom of source, enter top of target (TB style)
+      let points: [number, number][];
+      const startX = fcx, startY = fy + fromNode.height;
+      const endX = tcx, endY = ty;
+
+      if (Math.abs(startX - endX) < 2) {
+        // Straight vertical
+        points = [[startX, startY], [endX, endY]];
+      } else {
+        // Single elbow at midpoint Y
+        const midY = Math.round((startY + endY) / 2);
+        points = [[startX, startY], [startX, midY], [endX, midY], [endX, endY]];
+      }
+
+      const labelPos = { x: Math.round((fcx + tcx) / 2), y: Math.round((fcy + tcy) / 2) - 15 };
+      edgeRoutes.set(key, { points, labelPos });
+    }
+
+    return { positioned, edgeRoutes };
   }
 
   private layoutNodesGrid(): Map<string, PositionedNode> {
