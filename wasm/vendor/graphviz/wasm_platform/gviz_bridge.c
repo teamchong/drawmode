@@ -11,9 +11,11 @@
 
 /* Plugin registration */
 extern gvplugin_library_t gvplugin_dot_layout_LTX_library;
+extern gvplugin_library_t gvplugin_neato_layout_LTX_library;
 
 static lt_symlist_t builtin_plugins[] = {
     { "gvplugin_dot_layout_LTX_library", (void*)&gvplugin_dot_layout_LTX_library },
+    { "gvplugin_neato_layout_LTX_library", (void*)&gvplugin_neato_layout_LTX_library },
     { 0, 0 }
 };
 
@@ -78,6 +80,10 @@ void gviz_graph_close(gviz_graph_t g) {
 
 int gviz_layout(gviz_context_t ctx, gviz_graph_t g) {
     return gvLayout((GVC_t*)ctx, (Agraph_t*)g, "dot");
+}
+
+int gviz_layout_nop2(gviz_context_t ctx, gviz_graph_t g) {
+    return gvLayout((GVC_t*)ctx, (Agraph_t*)g, "nop2");
 }
 
 void gviz_free_layout(gviz_context_t ctx, gviz_graph_t g) {

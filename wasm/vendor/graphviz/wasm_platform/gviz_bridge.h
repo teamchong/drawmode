@@ -57,6 +57,7 @@ gviz_node_t gviz_subgraph_add_node(gviz_graph_t subg, gviz_node_t n);
 gviz_graph_t gviz_parse_dot(const char *dot_string);
 void gviz_graph_close(gviz_graph_t g);
 int gviz_layout(gviz_context_t ctx, gviz_graph_t g);
+int gviz_layout_nop2(gviz_context_t ctx, gviz_graph_t g);
 void gviz_free_layout(gviz_context_t ctx, gviz_graph_t g);
 
 /* Node iteration */

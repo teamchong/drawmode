@@ -104,9 +104,16 @@ function makeWasiImports(memRef: { memory: WebAssembly.Memory | null }) {
       fd_pwrite: () => 0,
       fd_read: () => 0,
       fd_seek: () => 0,
-      fd_write: (_fd: number, _iovs: number, _iovsLen: number, nwrittenPtr: number) => {
+      fd_write: (_fd: number, iovs: number, iovsLen: number, nwrittenPtr: number) => {
         if (memRef.memory) {
-          new DataView(memRef.memory.buffer).setUint32(nwrittenPtr, 0, true);
+          // Sum iov lengths and report all bytes as written (discard output).
+          // Returning 0 would cause musl stdio to retry infinitely.
+          const view = new DataView(memRef.memory.buffer);
+          let total = 0;
+          for (let i = 0; i < iovsLen; i++) {
+            total += view.getUint32(iovs + i * 8 + 4, true);
+          }
+          view.setUint32(nwrittenPtr, total, true);
         }
         return 0;
       },
@@ -203,7 +210,7 @@ export async function layoutGraphWasm(
   nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number; type?: string }[],
   edges: { from: string; to: string; label?: string }[],
   groups?: { id: string; label: string; children: string[]; parent?: string }[],
-  options?: { rankdir?: string },
+  options?: { rankdir?: string; engine?: string },
 ): Promise<WasmLayoutResult | null> {
   if (!wasmInstance) return null;
 
@@ -225,7 +232,7 @@ export async function layoutGraphWasm(
     (groups ?? []).map(g => ({ id: g.id, label: g.label, children: g.children, parent: g.parent ?? "" })),
   );
 
-  const optsJson = JSON.stringify({ rankdir: options?.rankdir ?? "TB" });
+  const optsJson = JSON.stringify({ rankdir: options?.rankdir ?? "TB", engine: options?.engine ?? "dot" });
 
   wasmInstance.resetHeap();
   const nodesBytes = new TextEncoder().encode(nodesJson);

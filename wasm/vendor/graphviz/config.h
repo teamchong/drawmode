@@ -7,6 +7,9 @@
 #define DEFAULT_DPI 72
 #define GVLIBDIR ""
 
+/* WASI libc provides drand48 */
+#define HAVE_DRAND48 1
+
 /* No optional features in WASM */
 /* #undef HAVE_EXPAT */
 /* #undef HAVE_LIBZ */

@@ -36,6 +36,11 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
     @memcpy(rankdir_buf[0..rd_len], rankdir_slice[0..rd_len]);
     rankdir_buf[rd_len] = 0;
     c.gviz_set_graph_attr(graph, "rankdir", @ptrCast(&rankdir_buf));
+
+    // Read engine from options: "dot" (default) or "nop2" (pre-positioned edge routing)
+    const engine_slice = extractStringField(opts_json, "engine") orelse "dot";
+    const use_nop2 = std.mem.eql(u8, engine_slice, "nop2");
+
     // Ortho routing produces looping arrows with rankdir=LR/RL;
     // use curved splines for horizontal directions, ortho for vertical.
     const is_horizontal = (rankdir_slice.len >= 2 and rankdir_slice[0] == 'L') or
@@ -52,6 +57,9 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
     c.gviz_set_default_node_attr(graph, "width", "");
     c.gviz_set_default_node_attr(graph, "height", "");
     c.gviz_set_default_node_attr(graph, "fixedsize", "");
+    if (use_nop2) {
+        c.gviz_set_default_node_attr(graph, "pos", "");
+    }
 
     // Set default edge attribute so per-edge label agsafeset works
     c.gviz_set_default_edge_attr(graph, "label", "");
@@ -140,14 +148,42 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
         }
     }
 
-    // Create GVC context with dot_layout plugin
+    // For nop2 mode: set pos="x,y!" on each node so neato reads fixed positions
+    if (use_nop2) {
+        for (nodes[0..node_count], 0..) |n, i| {
+            if (n.abs_x != null and n.abs_y != null) {
+                const np = node_ptrs[i] orelse continue;
+                // Convert Excalidraw coords (top-left, Y-down) to Graphviz (center, Y-up, 72dpi)
+                // absX/absY are top-left corner; add half width/height for center
+                const cx = @as(f64, @floatFromInt(n.abs_x.?)) + @as(f64, @floatFromInt(n.width)) / 2.0;
+                const cy_excali = @as(f64, @floatFromInt(n.abs_y.?)) + @as(f64, @floatFromInt(n.height)) / 2.0;
+                // Graphviz Y-up: we use raw value, writeGraphvizOutput will flip back
+                var pos_buf: [64]u8 = undefined;
+                var pb: usize = 0;
+                pb += writeFloat(pos_buf[pb..], cx);
+                pos_buf[pb] = ',';
+                pb += 1;
+                pb += writeFloat(pos_buf[pb..], cy_excali);
+                pos_buf[pb] = '!';
+                pb += 1;
+                pos_buf[pb] = 0;
+                c.gviz_set_node_attr(graph, np, "pos", @ptrCast(&pos_buf));
+            }
+        }
+        // For nop2: positions are already set, skip overlap adjustment and spline routing
+        c.gviz_set_graph_attr(graph, "overlap", "true");
+        c.gviz_set_graph_attr(graph, "splines", "none");
+    }
+
+    // Create GVC context
     const gvc = c.gviz_context_new() orelse {
         c.gviz_graph_close(graph);
         return 0;
     };
 
-    // Run dot layout
-    if (c.gviz_layout(gvc, graph) != 0) {
+    // Run layout: dot for normal graphs, nop2 for pre-positioned
+    const layout_rc = if (use_nop2) c.gviz_layout_nop2(gvc, graph) else c.gviz_layout(gvc, graph);
+    if (layout_rc != 0) {
         c.gviz_graph_close(graph);
         c.gviz_context_free(gvc);
         return 0;
@@ -213,6 +249,7 @@ pub const c = if (is_wasm) struct {
     pub extern fn gviz_context_free(ctx: ?*anyopaque) void;
     pub extern fn gviz_graph_close(g: ?*anyopaque) void;
     pub extern fn gviz_layout(ctx: ?*anyopaque, g: ?*anyopaque) c_int;
+        pub extern fn gviz_layout_nop2(ctx: ?*anyopaque, g: ?*anyopaque) c_int;
     pub extern fn gviz_free_layout(ctx: ?*anyopaque, g: ?*anyopaque) void;
 
     // Node iteration
@@ -244,6 +281,7 @@ pub const c = if (is_wasm) struct {
     pub fn gviz_context_free(_: ?*anyopaque) void {}
     pub fn gviz_graph_close(_: ?*anyopaque) void {}
     pub fn gviz_layout(_: ?*anyopaque, _: ?*anyopaque) c_int { return -1; }
+        pub fn gviz_layout_nop2(_: ?*anyopaque, _: ?*anyopaque) c_int { return -1; }
     pub fn gviz_free_layout(_: ?*anyopaque, _: ?*anyopaque) void {}
     pub fn gviz_first_node(_: ?*anyopaque) ?*anyopaque { return null; }
     pub fn gviz_next_node(_: ?*anyopaque, _: ?*anyopaque) ?*anyopaque { return null; }
