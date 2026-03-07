@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Diagram } from "./sdk.js";
 import { isWasmLoaded } from "./layout.js";
-import { unlink, writeFile, readFile, access } from "node:fs/promises";
+import { unlink, writeFile, readFile } from "node:fs/promises";
 
 describe("Diagram SDK", () => {
   it("addBox creates shape + text pair", async () => {
@@ -878,50 +878,6 @@ describe("Diagram SDK", () => {
     expect(withIconShape.height).toBeGreaterThan(noIconShape.height);
   });
 
-  // ── Auto-backup before overwrite ──
-
-  const backupTestFile = "/tmp/drawmode-test-backup.excalidraw";
-
-  afterEach(async () => {
-    try { await unlink(backupTestFile); } catch { /* ok */ }
-    try { await unlink(backupTestFile + ".bak"); } catch { /* ok */ }
-  });
-
-  it("overwriting creates .bak with original content", async () => {
-    const d1 = new Diagram();
-    d1.addBox("Original", { row: 0, col: 0 });
-    await d1.render({ format: "excalidraw", path: backupTestFile });
-    const originalContent = await readFile(backupTestFile, "utf-8");
-
-    // Overwrite
-    const d2 = new Diagram();
-    d2.addBox("Updated", { row: 0, col: 0 });
-    await d2.render({ format: "excalidraw", path: backupTestFile });
-
-    // .bak should exist with original content
-    const bakContent = await readFile(backupTestFile + ".bak", "utf-8");
-    expect(bakContent).toBe(originalContent);
-
-    // New file should have updated content
-    const newContent = await readFile(backupTestFile, "utf-8");
-    expect(newContent).not.toBe(originalContent);
-    expect(newContent).toContain("Updated");
-  });
-
-  it("fresh file creates no .bak", async () => {
-    // Ensure file doesn't exist
-    try { await unlink(backupTestFile); } catch { /* ok */ }
-
-    const d = new Diagram();
-    d.addBox("Fresh", { row: 0, col: 0 });
-    await d.render({ format: "excalidraw", path: backupTestFile });
-
-    // .bak should not exist
-    let bakExists = true;
-    try { await access(backupTestFile + ".bak"); } catch { bakExists = false; }
-    expect(bakExists).toBe(false);
-  });
-
   // ── Multi-edge differentiation ──
 
   it("multi-edges between same pair produce different arrows", async () => {
@@ -949,7 +905,6 @@ describe("Diagram SDK", () => {
 
   afterEach(async () => {
     try { await unlink(diffTestFile); } catch { /* ok */ }
-    try { await unlink(diffTestFile + ".bak"); } catch { /* ok */ }
   });
 
   it("changeSummary reports modified nodes when label changes", async () => {

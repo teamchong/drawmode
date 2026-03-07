@@ -1170,20 +1170,19 @@ export class Diagram {
 
     for (const format of formats) {
       if (format === "excalidraw") {
-        const { writeFile, readFile, access, copyFile } = await import("node:fs/promises");
+        const { writeFile, readFile, access } = await import("node:fs/promises");
         const path = opts?.path ?? "diagram.excalidraw";
 
-        // Auto-backup existing file before overwriting + compute diff
+        // Compute diff against existing file (if any)
         try {
           await access(path);
           const oldContent = await readFile(path, "utf-8");
-          await copyFile(path, path + ".bak");
           try {
             const oldFile = ExcalidrawFileSchema.parse(JSON.parse(oldContent));
             const summary = computeChangeSummary(oldFile.elements, elements);
             if (summary) result.changeSummary = summary;
           } catch { /* old file unparseable — skip diff */ }
-        } catch { /* file doesn't exist yet — no backup needed */ }
+        } catch { /* file doesn't exist yet */ }
 
         await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
         result.filePath = path;
@@ -1224,13 +1223,9 @@ export class Diagram {
 
     // Write sidecar .drawmode.ts for any format that writes to disk
     if (opts?.sourceCode && filePaths.length > 0) {
-      const { writeFile, access, copyFile } = await import("node:fs/promises");
+      const { writeFile } = await import("node:fs/promises");
       const basePath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "");
       const sidecarPath = basePath + ".drawmode.ts";
-      try {
-        await access(sidecarPath);
-        await copyFile(sidecarPath, sidecarPath + ".bak");
-      } catch { /* no existing sidecar */ }
       await writeFile(sidecarPath, opts.sourceCode);
     }
 

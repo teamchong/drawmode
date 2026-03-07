@@ -125,11 +125,6 @@ Labels support \\n for line breaks. A .drawmode.ts sidecar is always written alo
         parts.push({ type: "text" as const, text: result.changeSummary });
       }
 
-      // Surface backup info when a backup was created
-      if (result.filePath && result.changeSummary) {
-        parts.push({ type: "text" as const, text: `Backup saved to ${result.filePath}.bak` });
-      }
-
       // Surface layout/validation warnings
       if (result.warnings?.length) {
         parts.push({ type: "text" as const, text: result.warnings.map(w => `⚠ ${w}`).join("\n") });
