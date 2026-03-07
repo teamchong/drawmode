@@ -52,7 +52,15 @@ export async function executeCode(
     `;
 
     const fn = new Function("Diagram", wrappedCode);
-    const result = await fn(ConfiguredDiagram);
+
+    // 60s timeout — prevents infinite loops / stuck awaits from hanging forever
+    const TIMEOUT_MS = 60_000;
+    const result = await Promise.race([
+      fn(ConfiguredDiagram),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Execution timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS),
+      ),
+    ]);
 
     if (!result || typeof result !== "object") {
       return {
