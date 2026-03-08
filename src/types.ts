@@ -246,6 +246,18 @@ export interface RenderOpts {
   sourceCode?: string;
 }
 
+/** Options for group styling and layout */
+export interface GroupOpts {
+  /** Padding in pixels around group children (default 30) */
+  padding?: number;
+  /** Stroke color for the group boundary */
+  strokeColor?: string;
+  /** Stroke style for the group boundary (default "dashed") */
+  strokeStyle?: StrokeStyle;
+  /** Opacity 0-100 (default 60) */
+  opacity?: number;
+}
+
 /** Internal node representation before layout */
 export interface GraphNode {
   id: string;

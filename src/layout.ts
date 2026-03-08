@@ -39,7 +39,7 @@ export interface GroupBounds {
   width: number; height: number;
 }
 
-export interface WasmLayoutResult {
+interface WasmLayoutResult {
   nodes: { id: string; x: number; y: number }[];
   edgeRoutes: Map<string, EdgeRoute>;
   groupBounds?: GroupBounds[];

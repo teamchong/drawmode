@@ -8,7 +8,7 @@ import type {
   GraphNode, GraphEdge, FillStyle, StrokeStyle, FontFamily,
   Arrowhead, TextAlign, VerticalAlign, ColorPair,
   ExcalidrawElement, ExcalidrawFile, OutputFormat,
-  ThemePreset, ThemeOpts, LayoutDirection, DiagramType,
+  ThemePreset, ThemeOpts, LayoutDirection, DiagramType, GroupOpts,
 } from "./types.js";
 import { COLOR_PALETTE, ExcalidrawFileSchema } from "./types.js";
 import {
@@ -111,18 +111,6 @@ const THEME_PRESETS: Record<ThemePreset, ThemeOpts> = {
   blueprint: { fillStyle: "solid", roughness: 0, strokeWidth: 1, fontFamily: 3 },
   minimal: { fillStyle: "solid", roughness: 0, strokeWidth: 1, fontFamily: 2, opacity: 90 },
 };
-
-/** Options for group styling and layout */
-export interface GroupOpts {
-  /** Padding in pixels around group children (default 30) */
-  padding?: number;
-  /** Stroke color for the group boundary */
-  strokeColor?: string;
-  /** Stroke style for the group boundary (default "dashed") */
-  strokeStyle?: StrokeStyle;
-  /** Opacity 0-100 (default 60) */
-  opacity?: number;
-}
 
 const DEFAULT_WIDTH = 180;
 const DEFAULT_HEIGHT = 80;
@@ -1177,12 +1165,10 @@ export class Diagram {
         try {
           await access(path);
           const oldContent = await readFile(path, "utf-8");
-          try {
-            const oldFile = ExcalidrawFileSchema.parse(JSON.parse(oldContent));
-            const summary = computeChangeSummary(oldFile.elements, elements);
-            if (summary) result.changeSummary = summary;
-          } catch { /* old file unparseable — skip diff */ }
-        } catch { /* file doesn't exist yet */ }
+          const oldFile = ExcalidrawFileSchema.parse(JSON.parse(oldContent));
+          const summary = computeChangeSummary(oldFile.elements, elements);
+          if (summary) result.changeSummary = summary;
+        } catch { /* file doesn't exist or is unparseable — skip diff */ }
 
         await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
         result.filePath = path;
