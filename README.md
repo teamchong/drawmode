@@ -1,31 +1,23 @@
 # drawmode
 
-Code Mode MCP server for generating Excalidraw architecture diagrams. Instead of having LLMs write raw Excalidraw JSON (error-prone), they write TypeScript code against a typed SDK. Graphviz (statically linked in a Zig WASM module) handles graph layout with proper crossing minimization and orthogonal edge routing.
+Code Mode MCP server for generating Excalidraw diagrams. LLMs write ~10 lines of TypeScript instead of ~500 lines of raw Excalidraw JSON. The SDK handles all the complexity (bound text elements, arrow binding math, elbow routing flags), and Graphviz handles layout.
 
-## Features
-
-- **Code Mode** — LLM writes TypeScript, not raw JSON. One tool, typed SDK, zero prompt engineering
-- **Automatic layout** — Graphviz `dot` engine (Sugiyama algorithm) with crossing minimization and orthogonal edge routing
-- **10 semantic color presets** + 18 cloud provider presets (AWS, Azure, GCP, K8s)
-- **4 output formats** — `.excalidraw` file, excalidraw.com URL, PNG, SVG (multi-format in one call)
-- **Interactive HTML widget** — live Excalidraw preview in Claude Desktop and Cowork via MCP structured content
-- **Edit existing diagrams** — `Diagram.fromFile()` loads `.excalidraw` files for modification
-- **Groups and frames** — visual containment with customizable boundaries (padding, color, style, opacity)
-- **Diamonds and ellipses** — flowchart decision nodes, database cylinders
-- **Zig WASM validation** — catches broken bindings, duplicate IDs, overlapping elements
-- **Deploy anywhere** — local stdio, local HTTP, or Cloudflare Workers (remote MCP)
+```
+Traditional:  LLM  ->  500 lines of JSON  ->  broken diagrams
+drawmode:     LLM  ->  10 lines of TypeScript  ->  SDK + Graphviz  ->  valid diagrams
+```
 
 ## Quick Start
 
-```bash
-# Claude Code / Cursor
-npx drawmode --stdio
+### Claude Code
 
-# HTTP mode
-npx drawmode
+```bash
+claude mcp add drawmode -- npx drawmode --stdio
 ```
 
-### Claude Desktop / Cursor config
+### Claude Desktop / Cursor
+
+Add to your MCP config (`claude_desktop_config.json` or Cursor settings):
 
 ```json
 {
@@ -38,84 +30,141 @@ npx drawmode
 }
 ```
 
-## Why Code Mode?
+### HTTP Mode
 
-Traditional MCP diagram tools ask the LLM to produce raw Excalidraw JSON — hundreds of lines with pixel coordinates, bound text element pairs, arrow binding math, and edge routing. This is fragile and error-prone.
-
-drawmode flips the approach: the LLM writes **~10 lines of TypeScript** against a typed SDK. The SDK handles all the Excalidraw complexity (labels need two elements, arrows need binding math, elbow routing needs specific flags). Graphviz handles layout. The result is always valid.
-
+```bash
+npx drawmode
+# Streamable HTTP server on port 3001
 ```
-Traditional:  LLM → 500 lines of JSON → broken diagrams
-drawmode:     LLM → 10 lines of TypeScript → SDK + Graphviz → valid diagrams
-```
+
+### Remote (Cloudflare Workers)
+
+Deploy the `worker/` directory to Cloudflare Workers for remote MCP access. Requires `nodejs_compat` and `unsafe_eval` compatibility flags.
 
 ## How It Works
 
-1. LLM receives one tool (`draw`) with TypeScript type definitions (~100 lines)
-2. LLM writes code against the `Diagram` SDK
-3. Local executor runs it — SDK handles labels, colors, IDs
-4. Zig WASM (Graphviz C statically linked) handles layout positioning and edge routing
-5. WASM validation checks the output
-6. Output: `.excalidraw` file, excalidraw.com URL, PNG, SVG, or multiple formats at once. A `.drawmode.ts` sidecar preserves source code for iteration.
+1. The LLM receives a single `draw` tool with TypeScript type definitions (~100 lines)
+2. The LLM writes code against the `Diagram` SDK
+3. The executor runs the code via `new Function()` -- the SDK handles labels, colors, and IDs
+4. Graphviz (C library statically linked in a Zig WASM module) handles layout positioning and edge routing
+5. WASM validation checks the output for structural correctness
+6. Output is returned as `.excalidraw` files, excalidraw.com URLs, PNGs, SVGs, or any combination
+
+A `.drawmode.ts` sidecar file is always written alongside file output, preserving the source code for future iteration.
+
+## SDK API Reference
+
+### Constructor
 
 ```typescript
-const d = new Diagram();
-const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
-const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
-const cache = d.addBox("Redis", { row: 1, col: 2, color: "cache" });
-d.connect(api, db, "queries");
-d.connect(api, cache, "reads", { style: "dashed" });
-d.addGroup("Data Layer", [db, cache]);
-return d.render({ format: ["excalidraw", "png"], path: "arch" });
+const d = new Diagram(opts?: {
+  theme?: "default" | "sketch" | "blueprint" | "minimal";
+  direction?: "TB" | "LR" | "RL" | "BT";
+  type?: "architecture" | "sequence";
+});
 ```
 
-## SDK API
+### Adding Elements
 
-### Creating Elements
+| Method | Description |
+|--------|-------------|
+| `addBox(label, opts?)` | Add a rectangle. Returns element ID. |
+| `addEllipse(label, opts?)` | Add an ellipse. Returns element ID. |
+| `addDiamond(label, opts?)` | Add a diamond. Returns element ID. |
+| `addText(text, opts?)` | Add standalone text. Options: `x`, `y`, `fontSize`, `fontFamily`, `color`, `strokeColor`. |
+| `addLine(points, opts?)` | Add a line from `[x, y][]` points. Options: `strokeColor`, `strokeWidth`, `strokeStyle`. |
+| `addGroup(label, children, opts?)` | Add a visual group around children. Returns group ID. |
+| `addFrame(name, children)` | Add an Excalidraw frame container. Returns frame ID. |
+| `addActor(label, opts?)` | Add a sequence diagram actor. Returns element ID. |
+
+### Connections
+
+| Method | Description |
+|--------|-------------|
+| `connect(from, to, label?, opts?)` | Connect two elements with an arrow. |
+| `message(from, to, label?, opts?)` | Sequence diagram message (alias for connect). |
+
+### Querying
+
+| Method | Description |
+|--------|-------------|
+| `findByLabel(label, opts?)` | Find element IDs by label substring. Pass `{ exact: true }` for exact match. |
+| `getNodes()` | Get all node IDs. |
+| `getEdges()` | Get all edges as `{ from, to, label }[]`. |
+| `getNode(id)` | Get node details: label, type, width, height, etc. |
+
+### Editing
+
+| Method | Description |
+|--------|-------------|
+| `updateNode(id, update)` | Update a node's label, color, or any ShapeOpts property. |
+| `updateEdge(from, to, update, matchLabel?)` | Update an edge's label, style, or any ConnectOpts property. |
+| `removeNode(id)` | Remove a node and all its connected edges. |
+| `removeEdge(from, to, label?)` | Remove a specific edge. |
+| `removeGroup(id)` | Remove a group boundary (children are kept). |
+| `removeFrame(id)` | Remove a frame (children are kept). |
+
+### Configuration
+
+| Method | Description |
+|--------|-------------|
+| `setTheme(theme)` | Apply a theme preset to all subsequent shapes. |
+| `setDirection(direction)` | Set layout direction: `"TB"`, `"LR"`, `"RL"`, or `"BT"`. |
+
+### Loading
+
+| Method | Description |
+|--------|-------------|
+| `Diagram.fromFile(path)` | Load an existing `.excalidraw` file for editing. Returns `Promise<Diagram>`. |
+| `Diagram.fromMermaid(syntax)` | Parse Mermaid syntax into a Diagram. Returns `Diagram`. |
+
+### Rendering
 
 ```typescript
-// Rectangles, ellipses, and diamonds
-d.addBox(label, opts?)      // → element ID
-d.addEllipse(label, opts?)
-d.addDiamond(label, opts?)
-
-// Standalone text and lines
-d.addText(text, opts?)
-d.addLine(points, opts?)
-
-// Groups and frames
-d.addGroup(label, children[], opts?)  // opts: padding, strokeColor, strokeStyle, opacity
-d.addFrame(name, children[])
-
-// Connections
-d.connect(from, to, label?, opts?)
+const result = await d.render(opts?: {
+  format?: "excalidraw" | "url" | "png" | "svg" | Array<...>;
+  path?: string;
+});
 ```
+
+Returns a `RenderResult`:
+
+| Field | Description |
+|-------|-------------|
+| `json` | Raw Excalidraw JSON object |
+| `url` | Shareable excalidraw.com link (format `"url"`) |
+| `filePath` | Local file path written (format `"excalidraw"`) |
+| `filePaths` | All file paths written (multi-format) |
+| `pngBase64` | Base64-encoded PNG (format `"png"`) |
+| `svgString` | SVG markup string (format `"svg"`) |
+| `warnings` | Layout or validation warnings |
+| `changeSummary` | Human-readable diff when overwriting an existing file |
+| `stats` | `{ nodes, edges, groups }` |
 
 ### Shape Options
 
-All optional — sensible defaults are applied:
+All fields optional. Sensible defaults are applied.
 
 ```typescript
 interface ShapeOpts {
-  row?: number; col?: number;           // grid positioning
-  x?: number; y?: number;               // absolute positioning (bypasses grid)
-  color?: ColorPreset;                  // semantic color preset
+  row?: number; col?: number;         // Grid positioning (used by Graphviz layout)
+  x?: number; y?: number;            // Absolute positioning (bypasses grid)
+  color?: ColorPreset;               // Semantic color preset
   width?: number; height?: number;
-  strokeColor?: string;                 // hex override
-  backgroundColor?: string;            // hex override
+  strokeColor?: string;              // Hex color override
+  backgroundColor?: string;          // Hex color override
   fillStyle?: "solid" | "hachure" | "cross-hatch" | "zigzag";
-  strokeWidth?: number;                 // default 2
+  strokeWidth?: number;
   strokeStyle?: "solid" | "dashed" | "dotted";
-  roughness?: number;                   // 0=architect, 1=artist, 2=cartoonist
-  opacity?: number;                     // 0-100
-  roundness?: { type: number } | null;
-  fontSize?: number;                    // default 16
-  fontFamily?: 1 | 2 | 3;              // Virgil / Helvetica / Cascadia
+  roughness?: number;                // 0=architect, 1=artist, 2=cartoonist
+  opacity?: number;                  // 0-100
+  fontSize?: number;
+  fontFamily?: 1 | 2 | 3;           // 1=Virgil, 2=Helvetica, 3=Cascadia
   textAlign?: "left" | "center" | "right";
   verticalAlign?: "top" | "middle";
-  link?: string | null;                   // hyperlink URL
-  customData?: Record<string, unknown> | null; // arbitrary metadata
-  icon?: string;              // "database", "cloud", "lock", "server", "docker", etc. or raw emoji
+  link?: string;                     // Hyperlink URL
+  icon?: string;                     // Preset name or emoji, shown above label
+  customData?: Record<string, unknown>;
 }
 ```
 
@@ -126,43 +175,51 @@ interface ConnectOpts {
   style?: "solid" | "dashed" | "dotted";
   strokeColor?: string;
   strokeWidth?: number;
-  roughness?: number;
-  opacity?: number;
-  startArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";
-  endArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";  // default "arrow"
-  elbowed?: boolean;          // default true
+  startArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond";
+  endArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond";   // default "arrow"
+  elbowed?: boolean;                 // default true (orthogonal routing)
   labelFontSize?: number;
-  labelPosition?: "start" | "middle" | "end";  // where to place edge label
-  customData?: Record<string, unknown> | null; // arbitrary metadata
+  labelPosition?: "start" | "middle" | "end";
+  customData?: Record<string, unknown>;
 }
 ```
 
-### Editing Existing Diagrams
+### Group Options
 
 ```typescript
-const d = await Diagram.fromFile("diagram.excalidraw");
-
-// Find and inspect
-const ids = d.findByLabel("API");       // substring search
-const allNodes = d.getNodes();          // all node IDs
-const edges = d.getEdges();            // [{ from, to, label }]
-
-// Update
-d.updateNode(ids[0], { label: "New API", color: "ai" });
-d.updateEdge(from, to, { label: "writes", style: "dashed" });
-
-// Remove
-d.removeNode(d.findByLabel("Old")[0]);  // removes node + connected edges
-d.removeEdge(from, to, "queries");      // remove specific edge
-d.removeGroup(groupId);                 // remove group, keep children
-d.removeFrame(frameId);                 // remove frame, keep children
-
-return d.render({ path: "diagram.excalidraw" });
+interface GroupOpts {
+  padding?: number;          // Pixels around children (default 30)
+  strokeColor?: string;      // Hex color for boundary
+  strokeStyle?: StrokeStyle; // Default "dashed"
+  opacity?: number;          // 0-100 (default 60)
+}
 ```
+
+## Output Formats
+
+| Format | Description | Requires |
+|--------|-------------|----------|
+| `excalidraw` | `.excalidraw` JSON file | File system access |
+| `url` | Shareable excalidraw.com link (no auth needed) | Network access |
+| `png` | PNG image at 2x resolution | puppeteer (optional dep) |
+| `svg` | SVG markup | puppeteer (optional dep) |
+
+Pass an array for multiple formats in one call: `format: ["excalidraw", "png"]`.
+
+PNG and SVG export uses headless Chrome via puppeteer to render through the official Excalidraw library. puppeteer is an optional dependency -- export gracefully fails if not installed.
+
+## Themes
+
+| Theme | Style |
+|-------|-------|
+| `default` | Standard Excalidraw look |
+| `sketch` | Hand-drawn feel (hachure fill, high roughness, Virgil font) |
+| `blueprint` | Clean technical style (solid fill, no roughness, Cascadia font) |
+| `minimal` | Light and clean (solid fill, no roughness, Helvetica font) |
 
 ## Color Presets
 
-### General
+### General Purpose
 
 | Preset | Use for |
 |--------|---------|
@@ -187,82 +244,153 @@ return d.render({ path: "diagram.excalidraw" });
 
 **Kubernetes**: `k8s-pod`, `k8s-service`, `k8s-ingress`, `k8s-volume`
 
-## Output Formats
+## Examples
 
-| Format | Description | Works in |
-|--------|-------------|----------|
-| `excalidraw` | `.excalidraw` JSON file | Claude Code, Cursor, VS Code |
-| `url` | Shareable excalidraw.com link | All clients |
-| `png` | PNG image (via puppeteer) | Local with puppeteer, Cloudflare Worker |
-| `svg` | SVG markup | Local with puppeteer |
+### Architecture Diagram
 
-Pass an array for multiple formats at once: `format: ["excalidraw", "png"]`. A `.drawmode.ts` sidecar file is always written alongside file output, preserving the source code for future iteration via `Diagram.fromFile()`.
+```typescript
+const d = new Diagram({ direction: "TB" });
 
-## Architecture
+const client = d.addBox("Browser", { color: "frontend" });
+const api = d.addBox("API Gateway", { color: "backend" });
+const auth = d.addBox("Auth Service", { color: "backend" });
+const db = d.addBox("Postgres", { color: "database" });
+const cache = d.addBox("Redis", { color: "cache" });
 
-![Architecture](architecture.svg)
+d.connect(client, api, "HTTPS");
+d.connect(api, auth, "validate token");
+d.connect(api, db, "queries");
+d.connect(api, cache, "session lookup", { style: "dashed" });
 
-### Project Structure
+d.addGroup("Backend", [api, auth, db, cache]);
 
-```
-drawmode/
-├── src/                     # TypeScript (MCP server + SDK)
-│   ├── index.ts             # MCP server entry point (stdio + HTTP)
-│   ├── sdk.ts               # Diagram SDK (addBox, connect, render, etc.)
-│   ├── executor.ts          # Local executor
-│   ├── layout.ts            # Layout bridge (loads Zig WASM with Graphviz)
-│   ├── upload.ts            # Excalidraw.com upload
-│   ├── png.ts               # Image export (PNG/SVG via puppeteer)
-│   ├── types.ts             # Shared types
-│   └── widget.html          # MCP Apps HTML widget
-├── wasm/                    # Zig WASM module
-│   └── src/
-│       ├── main.zig         # WASM exports
-│       ├── layout.zig       # Graphviz layout (C lib statically linked)
-│       ├── arrows.zig       # Arrow routing
-│       ├── validate.zig     # Structural validation
-│       └── util.zig         # Shared utilities
-└── worker/                  # Cloudflare Worker (remote MCP)
-    ├── index.ts
-    └── wrangler.toml
+return d.render({ format: ["excalidraw", "url"], path: "architecture" });
 ```
 
-### Layout Engine
+### Edit an Existing Diagram
 
-**Graphviz** (C library statically linked in the Zig WASM module) is the primary layout engine:
+```typescript
+const d = await Diagram.fromFile("architecture.excalidraw");
 
-- **Sugiyama algorithm** — proper layered graph layout with crossing minimization
-- **Orthogonal edge routing** (`splines=ortho`) — 90-degree elbows matching Excalidraw style
-- **Cluster subgraphs** — groups rendered as Graphviz clusters
-- **Rank constraints** — nodes with same `row` value share a rank
+// Add a new service
+const queue = d.addBox("SQS Queue", { color: "queue" });
+const worker = d.addBox("Worker", { color: "backend" });
 
-### Zig WASM Module (`drawmode.wasm`)
+// Wire it up
+const api = d.findByLabel("API Gateway")[0];
+d.connect(api, queue, "enqueue jobs");
+d.connect(queue, worker, "process");
 
-Graphviz C is statically linked into a single Zig WASM binary that handles layout, edge routing, and validation.
+// Update an existing node
+const db = d.findByLabel("Postgres")[0];
+d.updateNode(db, { label: "Aurora Postgres", color: "aws-database" });
+
+return d.render({ path: "architecture.excalidraw" });
+```
+
+### Groups and Frames
+
+```typescript
+const d = new Diagram({ theme: "blueprint" });
+
+const fe1 = d.addBox("React App", { color: "frontend" });
+const fe2 = d.addBox("Admin Panel", { color: "frontend" });
+
+const svc1 = d.addBox("User Service", { color: "backend" });
+const svc2 = d.addBox("Order Service", { color: "backend" });
+const svc3 = d.addBox("Payment Service", { color: "backend" });
+
+const db1 = d.addBox("Users DB", { color: "database" });
+const db2 = d.addBox("Orders DB", { color: "database" });
+
+d.addGroup("Frontend", [fe1, fe2], { strokeColor: "#1971c2" });
+d.addGroup("Microservices", [svc1, svc2, svc3], { strokeColor: "#7048e8" });
+d.addGroup("Data Layer", [db1, db2], { strokeColor: "#2f9e44" });
+
+d.connect(fe1, svc1, "REST");
+d.connect(fe1, svc2, "REST");
+d.connect(fe2, svc1, "REST");
+d.connect(svc2, svc3, "gRPC");
+d.connect(svc1, db1);
+d.connect(svc2, db2);
+
+return d.render({ format: "url" });
+```
+
+### Sequence Diagram
+
+```typescript
+const d = new Diagram({ type: "sequence" });
+
+const user = d.addActor("User", { color: "users" });
+const app = d.addActor("App", { color: "frontend" });
+const api = d.addActor("API", { color: "backend" });
+const db = d.addActor("Database", { color: "database" });
+
+d.message(user, app, "Click Login");
+d.message(app, api, "POST /auth");
+d.message(api, db, "SELECT user");
+d.message(db, api, "user row", { style: "dashed" });
+d.message(api, app, "JWT token", { style: "dashed" });
+d.message(app, user, "Dashboard", { style: "dashed" });
+
+return d.render({ format: "url" });
+```
 
 ## Development
 
+### Prerequisites
+
+- Node.js >= 18
+- pnpm
+- Zig (for WASM module builds)
+
+### Commands
+
 ```bash
 pnpm install              # Install dependencies
-pnpm build                # Build TS + WASM
-pnpm dev                  # Dev server (HTTP mode)
-pnpm test                 # Run tests
+pnpm build                # Build TS + WASM (Zig failure is non-fatal)
+pnpm build:wasm           # Build WASM module + wasm-opt
+pnpm dev                  # Dev server (HTTP mode on port 3001)
+pnpm test                 # Run vitest tests
+pnpm typecheck            # TypeScript type checking
 
 cd wasm && zig build       # Build WASM module only
 cd wasm && zig build test  # Run Zig tests
 ```
 
-## Deployment
+### Project Structure
 
-**Local (stdio)**: `npx drawmode --stdio`
+```
+drawmode/
+├── src/
+│   ├── index.ts          # MCP server entry (stdio + HTTP)
+│   ├── sdk.ts            # Diagram SDK (addBox, connect, render, etc.)
+│   ├── executor.ts       # Code executor (new Function + Diagram subclass)
+│   ├── layout.ts         # Layout bridge (loads Zig WASM with Graphviz)
+│   ├── upload.ts         # Excalidraw.com upload (encrypt + POST)
+│   ├── png.ts            # PNG/SVG export (puppeteer + Excalidraw CDN)
+│   ├── types.ts          # Shared types
+│   └── widget.html       # HTML widget for Claude Desktop / Cowork
+├── wasm/
+│   └── src/
+│       ├── main.zig      # WASM exports (layoutGraph, validate)
+│       ├── layout.zig    # Graphviz layout (C lib statically linked)
+│       ├── validate.zig  # Structural validation
+│       └── util.zig      # Shared utilities
+└── worker/
+    ├── index.ts          # Cloudflare Worker entry
+    └── wrangler.toml
+```
 
-**Local (HTTP)**: `npx drawmode` — Streamable HTTP on port 3001
+### Layout Engine
 
-**Remote (Cloudflare)**: Deploy `worker/` to Cloudflare Workers
+Graphviz (C library statically linked in the Zig WASM module):
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/teamchong/drawmode/tree/main/worker)
-
-The Worker supports PNG export via [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) — headless Chromium on the edge renders pixel-perfect PNGs using the Excalidraw renderer. Free tier includes 10 min/day. For local dev with browser rendering: `cd worker && npx wrangler dev --remote`.
+- **Sugiyama algorithm** -- layered graph layout with crossing minimization
+- **Orthogonal edge routing** (`splines=ortho`) -- 90-degree elbows matching Excalidraw style, falls back to polyline if ortho fails
+- **Cluster subgraphs** -- groups rendered as Graphviz clusters for proper containment
+- **Rank constraints** -- nodes with same `row` value are placed on the same rank
 
 ## License
 
