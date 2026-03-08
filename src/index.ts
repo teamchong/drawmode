@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { executeCode } from "./executor.js";
 import { loadWasm, isWasmLoaded } from "./layout.js";
 import { SDK_TYPES } from "./sdk-types.js";
+import type { OutputFormatInput } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -77,7 +78,7 @@ Labels support \\n for line breaks. A .drawmode.ts sidecar is always written alo
       path: z.string().optional().describe("File path for output (base name; extensions derived per format)"),
     },
     async ({ code, format, path }) => {
-      const { result, error } = await executeCode(code, { format: format as any, path });
+      const { result, error } = await executeCode(code, { format: format as OutputFormatInput, path });
 
       if (error) {
         return {
@@ -90,8 +91,6 @@ Labels support \\n for line breaks. A .drawmode.ts sidecar is always written alo
       // - url format: just the URL
       // - excalidraw format: just the file path
       const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
-
-      const formats = Array.isArray(format) ? format : [format];
 
       if (result.pngBase64) {
         parts.push({ type: "image" as const, data: result.pngBase64, mimeType: "image/png" });
@@ -136,7 +135,7 @@ Labels support \\n for line breaks. A .drawmode.ts sidecar is always written alo
       }
 
       // Return structured content with interactive widget for all successful renders
-      const elements = (result.json as { elements?: unknown[] }).elements ?? [];
+      const elements = result.json.elements ?? [];
       if (elements.length > 0) {
         return {
           content: parts,

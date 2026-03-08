@@ -97,9 +97,7 @@ Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omit
         };
       }
 
-      const elements = Array.isArray((result.json as { elements?: unknown[] }).elements)
-        ? (result.json as { elements: unknown[] }).elements
-        : [];
+      const elements = result.json.elements ?? [];
       const parts: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 
       if (wantsPng) {

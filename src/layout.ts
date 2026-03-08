@@ -50,7 +50,6 @@ export interface WasmLayoutResult {
 interface WasmLayoutExports {
   memory: WebAssembly.Memory;
   alloc: (size: number) => number;
-  dealloc: (ptr: number, size: number) => void;
   resetHeap: () => void;
   layoutGraph: (nodesPtr: number, nodesLen: number, edgesPtr: number, edgesLen: number, groupsPtr: number, groupsLen: number, outPtr: number, outCap: number, optsPtr: number, optsLen: number) => number;
   validate: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;

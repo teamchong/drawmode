@@ -731,6 +731,7 @@ fn extractSplineFromEdge(edge: *anyopaque, from_name: []const u8, to_name: []con
                     var scx: f64 = 0;
                     var scy: f64 = 0;
                     c.gviz_node_coord(tail, &scx, &scy);
+                    if (sn.width == 0 or sn.height == 0) break;
                     const snx = scx - @as(f64, @floatFromInt(sn.width)) / 2.0;
                     const sny = (y_max - scy) - @as(f64, @floatFromInt(sn.height)) / 2.0;
                     result.start_fixed_point[0] = clamp01((fix_start_x - snx) / @as(f64, @floatFromInt(sn.width)));
@@ -744,6 +745,7 @@ fn extractSplineFromEdge(edge: *anyopaque, from_name: []const u8, to_name: []con
         if (head != null) {
             for (nodes[0..node_count]) |tn| {
                 if (std.mem.eql(u8, tn.id_slice, to_name)) {
+                    if (tn.width == 0 or tn.height == 0) break;
                     var tcx: f64 = 0;
                     var tcy: f64 = 0;
                     c.gviz_node_coord(head, &tcx, &tcy);
@@ -755,109 +757,6 @@ fn extractSplineFromEdge(edge: *anyopaque, from_name: []const u8, to_name: []con
                 }
             }
         }
-    }
-
-    return result;
-}
-
-fn findEdgeSpline(graph: *anyopaque, from_name: []const u8, to_name: []const u8, y_max: f64, nodes: *[MAX_NODES]Node, node_count: usize) SplineResult {
-    var result = SplineResult{
-        .points_x = undefined,
-        .points_y = undefined,
-        .point_count = 0,
-        .start_fixed_point = .{ 0.5, 0.5 },
-        .end_fixed_point = .{ 0.5, 0.5 },
-    };
-
-    // Find source node
-    var src_node: ?*anyopaque = null;
-    var n_ptr = c.gviz_first_node(graph);
-    while (n_ptr) |n| {
-        const name = c.gviz_node_name(n);
-        if (name != null and std.mem.eql(u8, std.mem.span(name.?), from_name)) {
-            src_node = n;
-            break;
-        }
-        n_ptr = c.gviz_next_node(graph, n);
-    }
-    const src = src_node orelse return result;
-
-    // Find the edge from src to target
-    var e_ptr = c.gviz_first_out_edge(graph, src);
-    while (e_ptr) |e| {
-        const head = c.gviz_edge_head(e);
-        if (head != null) {
-            const head_name = c.gviz_node_name(head);
-            if (head_name != null and std.mem.eql(u8, std.mem.span(head_name.?), to_name)) {
-                // Found the edge — extract spline data
-                var spline: GvizSpline = undefined;
-                if (c.gviz_edge_spline(e, &spline) != 0) {
-                    // Extract knot points from cubic bezier sequence.
-                    // For ortho splines, control points coincide with knots,
-                    // so every 3rd point gives the path waypoints.
-                    // Don't add sp/ep as separate points — they create tiny duplicate
-                    // segments near nodes. Use them only for fixedPoint calculation.
-                    var i: usize = 0;
-                    while (i < spline.point_count and result.point_count < MAX_SPLINE_POINTS) {
-                        const pt = spline.points[i];
-                        result.points_x[result.point_count] = @intFromFloat(pt.x);
-                        result.points_y[result.point_count] = @intFromFloat(y_max - pt.y);
-                        result.point_count += 1;
-                        i += 3;
-                    }
-                    // Also capture the last bezier knot if not already included
-                    if (spline.point_count > 0 and (spline.point_count - 1) % 3 != 0) {
-                        const last_pt = spline.points[spline.point_count - 1];
-                        if (result.point_count < MAX_SPLINE_POINTS) {
-                            result.points_x[result.point_count] = @intFromFloat(last_pt.x);
-                            result.points_y[result.point_count] = @intFromFloat(y_max - last_pt.y);
-                            result.point_count += 1;
-                        }
-                    }
-
-                    // Compute fixedPoints using sp/ep (arrow tip positions on node boundary)
-                    if (result.point_count >= 2) {
-                        // Use sp (start point) if available, else first bezier knot
-                        const fix_start_x: f64 = if (spline.has_start_point != 0) spline.start_point.x else @floatFromInt(result.points_x[0]);
-                        const fix_start_y: f64 = if (spline.has_start_point != 0) (y_max - spline.start_point.y) else @floatFromInt(result.points_y[0]);
-                        const fix_end_x: f64 = if (spline.has_end_point != 0) spline.end_point.x else @floatFromInt(result.points_x[result.point_count - 1]);
-                        const fix_end_y: f64 = if (spline.has_end_point != 0) (y_max - spline.end_point.y) else @floatFromInt(result.points_y[result.point_count - 1]);
-
-                        // Find source node dimensions
-                        for (nodes[0..node_count]) |sn| {
-                            if (std.mem.eql(u8, sn.id_slice, from_name)) {
-                                var scx: f64 = 0;
-                                var scy: f64 = 0;
-                                c.gviz_node_coord(src, &scx, &scy);
-                                const snx = scx - @as(f64, @floatFromInt(sn.width)) / 2.0;
-                                const sny = (y_max - scy) - @as(f64, @floatFromInt(sn.height)) / 2.0;
-                                result.start_fixed_point[0] = clamp01((fix_start_x - snx) / @as(f64, @floatFromInt(sn.width)));
-                                result.start_fixed_point[1] = clamp01((fix_start_y - sny) / @as(f64, @floatFromInt(sn.height)));
-                                break;
-                            }
-                        }
-                        // Find target node dimensions
-                        const head_for_fp = c.gviz_edge_head(e);
-                        if (head_for_fp != null) {
-                            for (nodes[0..node_count]) |tn| {
-                                if (std.mem.eql(u8, tn.id_slice, to_name)) {
-                                    var tcx: f64 = 0;
-                                    var tcy: f64 = 0;
-                                    c.gviz_node_coord(head_for_fp, &tcx, &tcy);
-                                    const tnx = tcx - @as(f64, @floatFromInt(tn.width)) / 2.0;
-                                    const tny = (y_max - tcy) - @as(f64, @floatFromInt(tn.height)) / 2.0;
-                                    result.end_fixed_point[0] = clamp01((fix_end_x - tnx) / @as(f64, @floatFromInt(tn.width)));
-                                    result.end_fixed_point[1] = clamp01((fix_end_y - tny) / @as(f64, @floatFromInt(tn.height)));
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                return result;
-            }
-        }
-        e_ptr = c.gviz_next_out_edge(graph, e);
     }
 
     return result;
