@@ -39,7 +39,7 @@ Add this to your MCP client's configuration file:
 
 ## Your First Diagram
 
-Once configured, ask your LLM to draw a diagram. The LLM receives a single `draw` tool and writes TypeScript code against the Diagram SDK:
+Once configured, ask your LLM to draw a diagram. The LLM receives three tools — `draw` (generate/edit), `draw_describe` (convert existing `.excalidraw` to code), and `draw_info` (capabilities reference) — and writes TypeScript code against the Diagram SDK:
 
 ```typescript
 const d = new Diagram();

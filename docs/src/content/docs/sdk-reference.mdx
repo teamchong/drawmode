@@ -273,6 +273,31 @@ Add a sequence diagram actor. Returns the actor ID. Uses the same `ShapeOpts` as
 
 Add a message between actors. Uses the same `ConnectOpts` as `connect`. Self-messages (same actor) render as rectangular loops.
 
+## Decompiler
+
+### `toCode(opts?)`
+
+Convert the current diagram state back to TypeScript SDK code. Produces compact, readable code that recreates the diagram — useful for debugging, sharing, and editing existing diagrams.
+
+```typescript
+const code = d.toCode();
+// Returns TypeScript like:
+// const d = new Diagram();
+// const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
+// ...
+
+// With a file path for render output:
+const code = d.toCode({ path: "architecture.excalidraw" });
+```
+
+Features:
+- Reverse-maps hex colors back to named presets (`"#d0bfff"` → `"backend"`)
+- Generates camelCase variable names from labels
+- Extracts shared styles when 3+ nodes share the same non-positional options
+- Avoids JavaScript reserved words in variable names
+
+A `.drawmode.ts` sidecar file containing `toCode()` output is automatically written alongside any file output from `render()`.
+
 ## Mermaid Import
 
 ### `Diagram.fromMermaid(syntax)`
@@ -383,7 +408,7 @@ Options for `connect()`:
 | `opacity` | `number` | — | 0-100 |
 | `startArrowhead` | `Arrowhead` | `null` | Start arrowhead type |
 | `endArrowhead` | `Arrowhead` | `"arrow"` | End arrowhead type |
-| `elbowed` | `boolean` | `true` | Use elbow routing |
+| `elbowed` | `boolean` | — | Orthogonal routing (Graphviz handles routing by default) |
 | `labelFontSize` | `number` | — | Label font size |
 | `labelPosition` | `"start" \| "middle" \| "end"` | `"middle"` | Where to place the edge label along the arrow |
 | `customData` | `Record<string, unknown> \| null` | — | Arbitrary metadata |

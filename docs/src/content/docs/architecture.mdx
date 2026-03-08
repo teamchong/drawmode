@@ -5,9 +5,9 @@ description: How drawmode works — execution pipeline, layout engine, and WASM 
 
 ## Code Mode Pattern
 
-drawmode exposes a single `draw` MCP tool. The LLM writes TypeScript code against the Diagram SDK:
+drawmode exposes three MCP tools: `draw` (generate/edit diagrams), `draw_describe` (convert `.excalidraw` to TypeScript), and `draw_info` (capabilities reference). The LLM writes TypeScript code against the Diagram SDK:
 
-1. LLM receives one tool (`draw`) with SDK type definitions (~100 lines)
+1. LLM receives the `draw` tool with SDK type definitions (~100 lines)
 2. LLM writes code using the `Diagram` class
 3. `executor.ts` runs code via `new Function("Diagram", code)` with a `ConfiguredDiagram` subclass
 4. Zig WASM (Graphviz C statically linked) handles layout positioning and arrow routing via the `dot` engine
@@ -26,13 +26,16 @@ drawmode/
 │   ├── upload.ts            # Excalidraw.com upload (encrypt + POST)
 │   ├── png.ts               # Image export (PNG/SVG via puppeteer + Excalidraw CDN)
 │   ├── types.ts             # Shared types (ColorPreset, ShapeOpts, ConnectOpts, etc.)
+│   ├── sdk-types.ts         # SDK type definitions string (embedded in tool description)
 │   └── widget.html          # MCP Apps HTML widget for Claude Desktop/Cowork
 ├── wasm/                    # Zig WASM module
 │   ├── src/
 │   │   ├── main.zig         # WASM exports (alloc, resetHeap, layoutGraph, routeArrows, validate)
 │   │   ├── layout.zig       # Graphviz layout (C lib statically linked)
-│   │   ├── arrows.zig       # Arrow routing (unused — Graphviz handles routing)
+│   │   ├── arrows.zig       # Arrow routing
 │   │   ├── validate.zig     # Structural validation
+│   │   ├── compress.zig     # Zlib compression (RFC 1950/1951)
+│   │   ├── font.zig         # Font metrics
 │   │   └── util.zig         # Shared utilities
 │   └── build.zig
 ├── worker/                  # Cloudflare Worker entry point (remote MCP)
@@ -47,7 +50,7 @@ drawmode/
 The primary layout engine is Graphviz — the C library is statically linked into the Zig WASM module (`drawmode.wasm`).
 
 - **`dot` layout**: Layered graph layout (Sugiyama algorithm) with proper crossing minimization
-- **`splines=ortho`**: Orthogonal edge routing (90-degree elbows matching Excalidraw style), falls back to `splines=polyline` if ortho fails
+- **`splines=ortho`**: Orthogonal edge routing for vertical layouts (TB/BT); curved splines for horizontal layouts (LR/RL)
 - **Cluster subgraphs**: Groups rendered as Graphviz clusters for proper containment
 - **`rank=same`**: Nodes with same `row` value share a rank in the layout
 - **Coordinate conversion**: Graphviz points (Y-up) → Excalidraw pixels (Y-down)
@@ -60,8 +63,12 @@ A single Zig WASM binary with Graphviz C statically linked. Handles layout, edge
 
 | Export | Description |
 |--------|-------------|
+| `alloc` / `dealloc` | Bump allocator memory management |
+| `resetHeap` | Reset bump allocator between calls |
 | `layoutGraph` | Primary layout engine (Graphviz Sugiyama with orthogonal edge routing) |
+| `routeArrows` | Arrow endpoint routing |
 | `validate` | Structural validation (bound text, duplicate IDs, overlapping elements) |
+| `zlibCompress` | Zlib compression for excalidraw.com upload |
 
 Input/output is JSON bytes — the TypeScript layer serializes to JSON, passes to WASM, and reads back results.
 

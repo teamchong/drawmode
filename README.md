@@ -82,7 +82,7 @@ const d = new Diagram(opts?: {
 | Method | Description |
 |--------|-------------|
 | `connect(from, to, label?, opts?)` | Connect two elements with an arrow. |
-| `message(from, to, label?, opts?)` | Sequence diagram message (alias for connect). |
+| `message(from, to, label?, opts?)` | Sequence diagram message. Uses separate message queue for sequence layout. |
 
 ### Querying
 
@@ -181,7 +181,7 @@ interface ConnectOpts {
   opacity?: number;                  // 0-100
   startArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";
   endArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";   // default "arrow"
-  elbowed?: boolean;                 // default true (orthogonal routing)
+  elbowed?: boolean;                 // orthogonal routing (Graphviz handles routing by default)
   labelFontSize?: number;
   labelPosition?: "start" | "middle" | "end";
   customData?: Record<string, unknown>;
@@ -389,9 +389,12 @@ drawmode/
 │   └── widget.html       # HTML widget for Claude Desktop / Cowork
 ├── wasm/
 │   └── src/
-│       ├── main.zig      # WASM exports (layoutGraph, validate)
+│       ├── main.zig      # WASM exports (layoutGraph, validate, zlibCompress)
 │       ├── layout.zig    # Graphviz layout (C lib statically linked)
+│       ├── arrows.zig    # Arrow routing
 │       ├── validate.zig  # Structural validation
+│       ├── compress.zig  # Zlib compression (RFC 1950/1951)
+│       ├── font.zig      # Font metrics
 │       └── util.zig      # Shared utilities
 └── worker/
     ├── index.ts          # Cloudflare Worker entry
