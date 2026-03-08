@@ -539,6 +539,7 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
                         }
                     }
                     shifted = true;
+                    break; // re-check from next pass after shifting
                 }
             }
         }
