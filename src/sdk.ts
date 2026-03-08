@@ -788,6 +788,13 @@ export class Diagram {
     // Generate readable variable names from labels
     const varNames = new Map<string, string>();
     const usedVars = new Set<string>();
+    const reserved = new Set([
+      "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+      "delete", "do", "else", "export", "extends", "false", "finally", "for",
+      "function", "if", "import", "in", "instanceof", "let", "new", "null",
+      "return", "super", "switch", "this", "throw", "true", "try", "typeof",
+      "var", "void", "while", "with", "yield", "await", "enum",
+    ]);
     const toVarName = (label: string, fallback: string): string => {
       // Strip icon emoji prefix (first line if multi-line with emoji)
       const cleanLabel = label.replace(/^[^\w\n]*\n/, "");
@@ -797,7 +804,7 @@ export class Diagram {
         .split(/\s+/)
         .map((w, i) => i === 0 ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
         .join("");
-      if (!name || /^\d/.test(name)) name = fallback;
+      if (!name || /^\d/.test(name) || reserved.has(name)) name = fallback;
       // Deduplicate
       const base = name;
       let suffix = 2;
@@ -1448,14 +1455,16 @@ export class Diagram {
     }
 
     // Write sidecar .drawmode.ts for any format that writes to disk
+    // Wrapped in try/catch — sidecar is a convenience, should never fail the render
     if (fs && filePaths.length > 0) {
-      const basePath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "");
-      const sidecarPath = basePath + ".drawmode.ts";
-      // toCode() produces a clean standalone representation
-      const sidecarCode = this.toCode({ path: opts?.path });
-      if (sidecarCode) {
-        await fs.writeFile(sidecarPath, sidecarCode);
-      }
+      try {
+        const basePath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "");
+        const sidecarPath = basePath + ".drawmode.ts";
+        const sidecarCode = this.toCode({ path: opts?.path });
+        if (sidecarCode) {
+          await fs.writeFile(sidecarPath, sidecarCode);
+        }
+      } catch { /* sidecar write is non-critical */ }
     }
 
     if (filePaths.length > 1) result.filePaths = filePaths;

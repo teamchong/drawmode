@@ -54,22 +54,25 @@ export async function executeCode(
     // 60s timeout — prevents infinite loops / stuck awaits from hanging forever
     const TIMEOUT_MS = 60_000;
     let timer: ReturnType<typeof setTimeout>;
-    const result = await Promise.race([
-      fn(ConfiguredDiagram),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Execution timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS);
-      }),
-    ]);
-    clearTimeout(timer!);
+    try {
+      const result = await Promise.race([
+        fn(ConfiguredDiagram),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Execution timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS);
+        }),
+      ]);
 
-    if (!result || typeof result !== "object") {
-      return {
-        result: { json: EMPTY_FILE },
-        error: "Code did not return a RenderResult. Make sure to return d.render().",
-      };
+      if (!result || typeof result !== "object") {
+        return {
+          result: { json: EMPTY_FILE },
+          error: "Code did not return a RenderResult. Make sure to return d.render().",
+        };
+      }
+
+      return { result };
+    } finally {
+      clearTimeout(timer!);
     }
-
-    return { result };
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     return {

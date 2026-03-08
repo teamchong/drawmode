@@ -974,6 +974,20 @@ describe("Diagram SDK", () => {
     expect(code).toContain('"POST /login"');
   });
 
+  it("toCode avoids JS reserved words as variable names", () => {
+    const d = new Diagram();
+    d.addBox("new", { color: "backend" });
+    d.addBox("return", { color: "database" });
+    d.addBox("class", { color: "frontend" });
+    const code = d.toCode();
+    // Should not produce "const new = ..." or "const return = ..." etc.
+    expect(code).not.toMatch(/const (new|return|class|delete|default) =/);
+    // But the labels should still appear
+    expect(code).toContain('"new"');
+    expect(code).toContain('"return"');
+    expect(code).toContain('"class"');
+  });
+
   // ── Diagram diff summary ──
 
   const diffTestFile = "/tmp/drawmode-test-diff.excalidraw";
