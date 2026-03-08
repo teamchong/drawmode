@@ -195,6 +195,9 @@ export const ExcalidrawFileSchema = z.object({
 
 export type ExcalidrawFile = z.infer<typeof ExcalidrawFileSchema>;
 
+/** Excalidraw file format version — used in ExcalidrawFile JSON */
+export const EXCALIDRAW_VERSION = 2;
+
 /** Layout direction for Graphviz rankdir */
 export type LayoutDirection = "TB" | "LR" | "RL" | "BT";
 

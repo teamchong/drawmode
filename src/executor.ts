@@ -7,9 +7,10 @@
  */
 
 import { Diagram } from "./sdk.js";
+import { EXCALIDRAW_VERSION } from "./types.js";
 import type { RenderResult, RenderOpts, ExcalidrawFile } from "./types.js";
 
-const EMPTY_FILE: ExcalidrawFile = { type: "excalidraw", version: 2, elements: [] };
+const EMPTY_FILE: ExcalidrawFile = { type: "excalidraw", version: EXCALIDRAW_VERSION, elements: [] };
 
 export interface ExecuteResult {
   result: RenderResult;

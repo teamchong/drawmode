@@ -10,13 +10,18 @@ import type {
   ExcalidrawElement, ExcalidrawFile, OutputFormat,
   ThemePreset, ThemeOpts, LayoutDirection, DiagramType, GroupOpts,
 } from "./types.js";
-import { COLOR_PALETTE, ExcalidrawFileSchema } from "./types.js";
+import { COLOR_PALETTE, EXCALIDRAW_VERSION, ExcalidrawFileSchema } from "./types.js";
 import {
   validateElements, isWasmLoaded, loadWasm,
   layoutGraphWasm,
   type EdgeRoute,
   type GroupBounds,
 } from "./layout.js";
+
+interface PositionedNode extends GraphNode {
+  x?: number;
+  y?: number;
+}
 
 /** Compare old and new Excalidraw elements to produce a human-readable change summary. */
 function computeChangeSummary(oldElements: ExcalidrawElement[], newElements: ExcalidrawElement[]): string | undefined {
@@ -114,7 +119,7 @@ const THEME_PRESETS: Record<ThemePreset, ThemeOpts> = {
 
 const DEFAULT_WIDTH = 180;
 const DEFAULT_HEIGHT = 80;
-const LINE_HEIGHT = 24; // extra height per additional line of text
+const EXTRA_LINE_PX = 24; // extra height per additional line of text
 const COL_SPACING = 280;
 const ROW_SPACING = 220;
 const BASE_X = 100;
@@ -421,6 +426,11 @@ export class Diagram {
     }
   }
 
+  /** Internal access to the nodes map — used by static methods like fromMermaid. */
+  private _getNodes(): Map<string, GraphNode> {
+    return this.nodes;
+  }
+
   /** Set a theme preset that applies defaults to all subsequently added shapes. */
   setTheme(theme: ThemePreset): void {
     this.themeDefaults = THEME_PRESETS[theme] ?? {};
@@ -466,7 +476,7 @@ export class Diagram {
     const autoWidth = Math.max(DEFAULT_WIDTH, measured.width + 40);
     // Minimum height must fit the text content + padding (20px top/bottom)
     const minTextHeight = measured.height + 20;
-    const computedHeight = mergedOpts?.height ?? (DEFAULT_HEIGHT + extraLines * LINE_HEIGHT);
+    const computedHeight = mergedOpts?.height ?? (DEFAULT_HEIGHT + extraLines * EXTRA_LINE_PX);
     this.nodes.set(id, {
       id, label: displayLabel, type,
       row: mergedOpts?.row, col: mergedOpts?.col,
@@ -975,7 +985,7 @@ export class Diagram {
       names.forEach((name, idx) => {
         const nodeId = nodeMap.get(name);
         if (!nodeId) return;
-        const node = (d as unknown as { nodes: Map<string, GraphNode> }).nodes.get(nodeId);
+        const node = d._getNodes().get(nodeId);
         if (!node) return;
         if (direction === "LR" || direction === "RL") {
           node.col = depth;
@@ -1135,7 +1145,7 @@ export class Diagram {
 
     const excalidrawJson: ExcalidrawFile = {
       type: "excalidraw" as const,
-      version: 2,
+      version: EXCALIDRAW_VERSION,
       source: "drawmode",
       elements,
       appState: { gridSize: null, viewBackgroundColor: "#ffffff" },
@@ -1156,21 +1166,24 @@ export class Diagram {
     const formats: OutputFormat[] = Array.isArray(formatInput) ? formatInput : [formatInput];
     const filePaths: string[] = [];
 
+    // Import fs once if any format writes to disk
+    const needsFs = formats.includes("excalidraw") || opts?.sourceCode;
+    const fs = needsFs ? await import("node:fs/promises") : null;
+
     for (const format of formats) {
       if (format === "excalidraw") {
-        const { writeFile, readFile, access } = await import("node:fs/promises");
         const path = opts?.path ?? "diagram.excalidraw";
 
         // Compute diff against existing file (if any)
         try {
-          await access(path);
-          const oldContent = await readFile(path, "utf-8");
+          await fs!.access(path);
+          const oldContent = await fs!.readFile(path, "utf-8");
           const oldFile = ExcalidrawFileSchema.parse(JSON.parse(oldContent));
           const summary = computeChangeSummary(oldFile.elements, elements);
           if (summary) result.changeSummary = summary;
         } catch { /* file doesn't exist or is unparseable — skip diff */ }
 
-        await writeFile(path, JSON.stringify(excalidrawJson, null, 2));
+        await fs!.writeFile(path, JSON.stringify(excalidrawJson, null, 2));
         result.filePath = path;
         filePaths.push(path);
       }
@@ -1209,10 +1222,9 @@ export class Diagram {
 
     // Write sidecar .drawmode.ts for any format that writes to disk
     if (opts?.sourceCode && filePaths.length > 0) {
-      const { writeFile } = await import("node:fs/promises");
       const basePath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "");
       const sidecarPath = basePath + ".drawmode.ts";
-      await writeFile(sidecarPath, opts.sourceCode);
+      await fs!.writeFile(sidecarPath, opts.sourceCode);
     }
 
     if (filePaths.length > 1) result.filePaths = filePaths;
@@ -2195,7 +2207,3 @@ function resolveColor(opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"):
   };
 }
 
-interface PositionedNode extends GraphNode {
-  x?: number;
-  y?: number;
-}
