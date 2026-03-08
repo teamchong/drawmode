@@ -364,6 +364,8 @@ fn createCluster(parent: *anyopaque, gi: usize, g: Group, nodes: *[MAX_NODES]Nod
 
 fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX_NODES]Node, node_count: usize, edges: *[MAX_EDGES]Edge, edge_count: usize, groups: *[MAX_GROUPS]Group, group_count: usize, cluster_ptrs: *[MAX_GROUPS]?*anyopaque, edge_ptrs: *[MAX_EDGES]?*anyopaque) usize {
     var w: usize = 0;
+    // Reserve margin to detect buffer exhaustion (return 0 = error)
+    const MARGIN = 256;
 
     // Get bounding box for Y-flip (Graphviz Y-up → Excalidraw Y-down)
     const bb = c.gviz_graph_bbox(graph);
@@ -436,6 +438,7 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
         w += copySlice(out[w..], ",\"y\":");
         w += writeInt(out[w..], node_y);
         w += copySlice(out[w..], "}");
+        if (w + MARGIN > out.len) return 0; // buffer exhausted
 
         n_ptr = c.gviz_next_node(graph, n);
     }
@@ -634,6 +637,7 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
         }
 
         w += copySlice(out[w..], "}");
+        if (w + MARGIN > out.len) return 0; // buffer exhausted
     }
 
     w += copySlice(out[w..], "]");
@@ -666,6 +670,7 @@ fn writeGraphvizOutput(out: []u8, graph: *anyopaque, _: *anyopaque, nodes: *[MAX
             w += copySlice(out[w..], ",\"height\":");
             w += writeInt(out[w..], gh);
             w += copySlice(out[w..], "}");
+            if (w + MARGIN > out.len) return 0; // buffer exhausted
         }
         w += copySlice(out[w..], "]");
     }
@@ -764,6 +769,7 @@ fn extractSplineFromEdge(edge: *anyopaque, from_name: []const u8, to_name: []con
 }
 
 fn absInt(v: i32) i32 {
+    if (v == std.math.minInt(i32)) return std.math.maxInt(i32);
     return if (v < 0) -v else v;
 }
 
@@ -794,12 +800,17 @@ fn nullTerminate(slice: []const u8) ?[*:0]const u8 {
 // ── Float formatting ──
 
 fn writeFloat(out: []u8, val: f64) usize {
-    const negative = val < 0;
-    const abs_val = if (negative) -val else val;
+    // Guard against extreme values that would overflow i64/i32
+    const clamped = std.math.clamp(val, -1e9, 1e9);
+    const negative = clamped < 0;
+    const abs_val = if (negative) -clamped else clamped;
     const int_part = @as(i64, @intFromFloat(abs_val));
-    const frac = @as(i64, @intFromFloat((abs_val - @as(f64, @floatFromInt(int_part))) * 100.0 + 0.5));
+    var frac = @as(i64, @intFromFloat((abs_val - @as(f64, @floatFromInt(int_part))) * 100.0 + 0.5));
+    // Clamp frac to 99 — rounding can push it to 100
+    if (frac > 99) frac = 99;
 
     var w: usize = 0;
+    if (out.len < 16) return 0; // need space for sign + int + dot + frac
     if (negative) {
         out[w] = '-';
         w += 1;

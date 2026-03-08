@@ -9,18 +9,36 @@ pub fn copySlice(dst: []u8, src: []const u8) usize {
 }
 
 /// Write a JSON-escaped string into a destination buffer. Returns bytes written.
-/// Escapes " and \ characters for safe inclusion in JSON string values.
+/// Escapes ", \, and control characters (newline, tab, carriage return) for valid JSON.
 pub fn copySliceJsonEscaped(dst: []u8, src: []const u8) usize {
     var written: usize = 0;
-    for (src) |c| {
-        if (c == '"' or c == '\\') {
+    for (src) |ch| {
+        if (ch == '"' or ch == '\\') {
             if (written + 2 > dst.len) break;
             dst[written] = '\\';
-            dst[written + 1] = c;
+            dst[written + 1] = ch;
             written += 2;
+        } else if (ch == '\n') {
+            if (written + 2 > dst.len) break;
+            dst[written] = '\\';
+            dst[written + 1] = 'n';
+            written += 2;
+        } else if (ch == '\r') {
+            if (written + 2 > dst.len) break;
+            dst[written] = '\\';
+            dst[written + 1] = 'r';
+            written += 2;
+        } else if (ch == '\t') {
+            if (written + 2 > dst.len) break;
+            dst[written] = '\\';
+            dst[written + 1] = 't';
+            written += 2;
+        } else if (ch < 0x20) {
+            // Other control characters — skip (rare in practice)
+            continue;
         } else {
             if (written >= dst.len) break;
-            dst[written] = c;
+            dst[written] = ch;
             written += 1;
         }
     }

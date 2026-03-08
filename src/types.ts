@@ -245,8 +245,6 @@ export interface RenderResult {
 export interface RenderOpts {
   format?: OutputFormatInput;
   path?: string;
-  /** Source code for sidecar file */
-  sourceCode?: string;
 }
 
 /** Options for group styling and layout */

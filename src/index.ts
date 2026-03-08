@@ -60,15 +60,15 @@ d.addGroup("Data Layer", [db, cache]);
 return d.render({ format: "url" });
 \`\`\`
 
-Example — edit existing diagram:
+Example — edit existing diagram (use draw_describe first to get the code):
 \`\`\`typescript
-const d = await Diagram.fromFile("diagram.excalidraw");
-d.updateNode(d.findByLabel("Old Service")[0], { label: "New Service", color: "ai" });
-d.removeNode(d.findByLabel("Deprecated")[0]);
+const d = new Diagram();
+const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
+// ... modify from draw_describe output ...
 return d.render({ path: "diagram.excalidraw" });
 \`\`\`
 
-Labels support \\n for line breaks. A .drawmode.ts sidecar is always written alongside output — prefer editing it over fromFile() when available.`,
+Labels support \\n for line breaks. To edit an existing diagram: call draw_describe to get TypeScript code, modify it, then pass to draw. A .drawmode.ts sidecar is also written alongside file output.`,
     {
       code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
       format: z.union([
@@ -156,6 +156,32 @@ Labels support \\n for line breaks. A .drawmode.ts sidecar is always written alo
   );
 
   server.tool(
+    "draw_describe",
+    `Convert an existing .excalidraw file to editable TypeScript code.
+Returns compact SDK code that recreates the diagram — much smaller than raw JSON.
+Use this instead of reading .excalidraw files directly. Then modify the code and pass it to the draw tool.`,
+    {
+      path: z.string().describe("Path to the .excalidraw file to describe"),
+    },
+    async ({ path }) => {
+      try {
+        const { Diagram } = await import("./sdk.js");
+        const d = await Diagram.fromFile(path);
+        const code = d.toCode({ path });
+        return {
+          content: [{ type: "text" as const, text: code }],
+        };
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        return {
+          content: [{ type: "text" as const, text: `Error: ${message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
     "draw_info",
     "Get information about drawmode capabilities, color presets, and SDK reference.",
     {},
@@ -217,19 +243,16 @@ Labels support \\n for line breaks. A .drawmode.ts sidecar is always written alo
 
 ## Iterating on Diagrams
 
-When you render with format "excalidraw", a .drawmode.ts sidecar is saved with the source code.
-To iterate: read the .drawmode.ts file, modify the code, and re-execute via the draw tool.
-Use fromFile() only for diagrams without a .drawmode.ts sidecar.
+**Best workflow**: Call draw_describe with the .excalidraw path to get compact TypeScript code,
+modify it, then pass to draw. This is much faster than reading raw JSON.
 
-## Editing Existing Diagrams (no sidecar)
+A .drawmode.ts sidecar is also saved alongside file output — you can read and modify it directly.
 
-\`\`\`typescript
-const d = await Diagram.fromFile("diagram.excalidraw");
-const ids = d.findByLabel("API");       // substring search
-d.updateNode(ids[0], { label: "New API", color: "ai" });
-d.removeNode(d.findByLabel("Old")[0]);  // removes node + connected edges
-return d.render({ path: "diagram.excalidraw" });
-\`\`\`
+## Editing Existing Diagrams
+
+1. Call draw_describe("diagram.excalidraw") → get TypeScript code
+2. Modify the code (add/remove nodes, change colors, etc.)
+3. Pass modified code to draw tool
 
 ## SDK Reference
 ${SDK_TYPES}

@@ -1156,11 +1156,12 @@ export class Diagram {
 
     // Build adjacency from edges
     const adj = new Map<string, string[]>();
+    const idToName = new Map<string, string>();
+    for (const [name, id] of nodeMap) idToName.set(id, name);
     for (const name of allNodeNames) adj.set(name, []);
     for (const edge of d.getEdges()) {
-      // Reverse-map IDs to names
-      const srcName = [...nodeMap.entries()].find(([, id]) => id === edge.from)?.[0];
-      const tgtName = [...nodeMap.entries()].find(([, id]) => id === edge.to)?.[0];
+      const srcName = idToName.get(edge.from);
+      const tgtName = idToName.get(edge.to);
       if (srcName && tgtName) {
         adj.get(srcName)!.push(tgtName);
       }
@@ -1274,6 +1275,8 @@ export class Diagram {
     if (update.height !== undefined) node.height = update.height;
     if (update.x !== undefined) node.absX = update.x;
     if (update.y !== undefined) node.absY = update.y;
+    if (update.row !== undefined) node.row = update.row;
+    if (update.col !== undefined) node.col = update.col;
 
     // Update color
     if (update.color) {
@@ -1337,7 +1340,8 @@ export class Diagram {
     if (!edge) throw new Error(`Edge not found: ${from} -> ${to}`);
     if (update.label !== undefined) edge.label = update.label;
     if (update.style !== undefined) edge.style = update.style;
-    edge.opts = { ...edge.opts, ...update };
+    const { label: _, style: __, ...connectUpdates } = update;
+    edge.opts = { ...edge.opts, ...connectUpdates };
   }
 
   /** Render the diagram to the specified format. */
@@ -1390,7 +1394,7 @@ export class Diagram {
     const filePaths: string[] = [];
 
     // Import fs once if any format writes to disk
-    const needsFs = formats.includes("excalidraw") || opts?.sourceCode;
+    const needsFs = formats.includes("excalidraw") || formats.includes("png") || formats.includes("svg");
     const fs = needsFs ? await import("node:fs/promises") : null;
 
     for (const format of formats) {
@@ -1407,7 +1411,7 @@ export class Diagram {
         } catch { /* file doesn't exist or is unparseable — skip diff */ }
 
         await fs!.writeFile(path, JSON.stringify(excalidrawJson, null, 2));
-        result.filePath = path;
+        if (!result.filePath) result.filePath = path;
         filePaths.push(path);
       }
 
@@ -1422,7 +1426,7 @@ export class Diagram {
         const pngData = await renderPngLocal(elements, pngPath);
         if (pngData) {
           result.pngBase64 = pngData;
-          result.filePath = pngPath;
+          if (!result.filePath) result.filePath = pngPath;
           filePaths.push(pngPath);
         } else {
           throw new Error("PNG export requires puppeteer. Install it with: npm install puppeteer");
@@ -1435,7 +1439,7 @@ export class Diagram {
         const svgData = await renderSvgLocal(elements, svgPath);
         if (svgData) {
           result.svgString = svgData;
-          result.filePath = svgPath;
+          if (!result.filePath) result.filePath = svgPath;
           filePaths.push(svgPath);
         } else {
           throw new Error("SVG export requires puppeteer. Install it with: npm install puppeteer");
@@ -1444,10 +1448,14 @@ export class Diagram {
     }
 
     // Write sidecar .drawmode.ts for any format that writes to disk
-    if (opts?.sourceCode && filePaths.length > 0) {
+    if (fs && filePaths.length > 0) {
       const basePath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "");
       const sidecarPath = basePath + ".drawmode.ts";
-      await fs!.writeFile(sidecarPath, opts.sourceCode);
+      // toCode() produces a clean standalone representation
+      const sidecarCode = this.toCode({ path: opts?.path });
+      if (sidecarCode) {
+        await fs.writeFile(sidecarPath, sidecarCode);
+      }
     }
 
     if (filePaths.length > 1) result.filePaths = filePaths;

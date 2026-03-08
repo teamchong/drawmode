@@ -43,7 +43,7 @@ Deploy the `worker/` directory to Cloudflare Workers for remote MCP access. Requ
 
 ## How It Works
 
-1. The LLM receives a single `draw` tool with TypeScript type definitions (~100 lines)
+1. The LLM receives the `draw` tool with TypeScript type definitions (~100 lines). Two companion tools — `draw_describe` (convert `.excalidraw` to TypeScript) and `draw_info` (capabilities reference) — support the workflow
 2. The LLM writes code against the `Diagram` SDK
 3. The executor runs the code via `new Function()` -- the SDK handles labels, colors, and IDs
 4. Graphviz (C library statically linked in a Zig WASM module) handles layout positioning and edge routing
@@ -117,6 +117,7 @@ const d = new Diagram(opts?: {
 |--------|-------------|
 | `Diagram.fromFile(path)` | Load an existing `.excalidraw` file for editing. Returns `Promise<Diagram>`. |
 | `Diagram.fromMermaid(syntax)` | Parse Mermaid syntax into a Diagram. Returns `Diagram`. |
+| `d.toCode(opts?)` | Convert diagram state back to TypeScript SDK code. Used by `draw_describe` tool. |
 
 ### Rendering
 
@@ -162,6 +163,7 @@ interface ShapeOpts {
   fontFamily?: 1 | 2 | 3;           // 1=Virgil, 2=Helvetica, 3=Cascadia
   textAlign?: "left" | "center" | "right";
   verticalAlign?: "top" | "middle";
+  roundness?: { type: number } | null;
   link?: string;                     // Hyperlink URL
   icon?: string;                     // Preset name or emoji, shown above label
   customData?: Record<string, unknown>;
@@ -175,8 +177,10 @@ interface ConnectOpts {
   style?: "solid" | "dashed" | "dotted";
   strokeColor?: string;
   strokeWidth?: number;
-  startArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond";
-  endArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond";   // default "arrow"
+  roughness?: number;
+  opacity?: number;                  // 0-100
+  startArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";
+  endArrowhead?: null | "arrow" | "bar" | "dot" | "triangle" | "diamond" | "diamond_outline";   // default "arrow"
   elbowed?: boolean;                 // default true (orthogonal routing)
   labelFontSize?: number;
   labelPosition?: "start" | "middle" | "end";
@@ -268,6 +272,16 @@ return d.render({ format: ["excalidraw", "url"], path: "architecture" });
 ```
 
 ### Edit an Existing Diagram
+
+**Best workflow**: Use the `draw_describe` tool first to get compact TypeScript, then modify and re-render:
+
+```
+1. Call draw_describe("architecture.excalidraw") → get TypeScript code
+2. Modify the code (add/remove nodes, change colors, etc.)
+3. Pass modified code to the draw tool
+```
+
+You can also use `fromFile()` for programmatic edits:
 
 ```typescript
 const d = await Diagram.fromFile("architecture.excalidraw");
@@ -371,6 +385,7 @@ drawmode/
 │   ├── upload.ts         # Excalidraw.com upload (encrypt + POST)
 │   ├── png.ts            # PNG/SVG export (puppeteer + Excalidraw CDN)
 │   ├── types.ts          # Shared types
+│   ├── sdk-types.ts      # SDK type definitions string (embedded in tool description)
 │   └── widget.html       # HTML widget for Claude Desktop / Cowork
 ├── wasm/
 │   └── src/

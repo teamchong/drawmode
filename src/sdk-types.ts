@@ -56,6 +56,7 @@ declare class Diagram {
 
   static fromFile(path: string): Promise<Diagram>;
   static fromMermaid(syntax: string): Diagram;
+  toCode(opts?: { path?: string }): string;  // convert diagram state to TypeScript SDK code
   findByLabel(label: string, opts?: { exact?: boolean }): string[];
   getNodes(): string[];
   getEdges(): Array<{ from: string; to: string; label?: string }>;

@@ -103,6 +103,6 @@ describe("executeCode", () => {
     // Sidecar should exist with the source code
     const sidecar = await readFile(sidecarTsFile, "utf-8");
     expect(sidecar).toContain("d.addBox");
-    expect(sidecar).toContain("d.render()");
+    expect(sidecar).toContain("d.render(");
   });
 });

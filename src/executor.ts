@@ -31,14 +31,11 @@ export async function executeCode(
   formatMap?: Partial<Record<string, string>>,
 ): Promise<ExecuteResult> {
   try {
-    // Merge sourceCode into renderOpts so render() can write sidecar
-    const mergedOpts: RenderOpts = { ...renderOpts, sourceCode: code };
-
     // Create a per-execution Diagram subclass that merges renderOpts as defaults.
     // This avoids mutating Diagram.prototype which would stack across concurrent requests.
     class ConfiguredDiagram extends Diagram {
       override async render(opts?: RenderOpts): Promise<RenderResult> {
-        const merged = { ...mergedOpts, ...opts };
+        const merged = { ...renderOpts, ...opts };
         if (formatMap && typeof merged.format === "string" && merged.format in formatMap) {
           merged.format = formatMap[merged.format] as RenderOpts["format"];
         }
@@ -56,12 +53,14 @@ export async function executeCode(
 
     // 60s timeout — prevents infinite loops / stuck awaits from hanging forever
     const TIMEOUT_MS = 60_000;
+    let timer: ReturnType<typeof setTimeout>;
     const result = await Promise.race([
       fn(ConfiguredDiagram),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Execution timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS),
-      ),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Execution timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS);
+      }),
     ]);
+    clearTimeout(timer!);
 
     if (!result || typeof result !== "object") {
       return {

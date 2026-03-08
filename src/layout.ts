@@ -5,6 +5,9 @@
 
 import { z } from "zod";
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
 class WasiExit extends Error {
   code: number;
   constructor(code: number) { super(`WASI exit: ${code}`); this.code = code; }
@@ -165,7 +168,8 @@ export async function loadWasm(source?: string | WebAssembly.Module | BufferSour
       const bytes = await readFile(path);
       await initWasm(bytes);
     }
-  } catch {
+  } catch (e) {
+    if (typeof process !== "undefined") process.stderr.write(`[drawmode] WASM load failed: ${e}\n`);
     wasmInstance = null;
   }
 }
@@ -194,11 +198,11 @@ function callWasm(
 ): string | null {
   if (!wasmInstance) return null;
   wasmInstance.resetHeap();
-  const inBytes = new TextEncoder().encode(inputJson);
+  const inBytes = encoder.encode(inputJson);
   const inPtr = writeToWasm(inBytes);
   const outPtr = wasmInstance.alloc(outCap);
   const written = fn(inPtr, inBytes.byteLength, outPtr, outCap);
-  return written > 0 ? new TextDecoder().decode(readFromWasm(outPtr, written)) : null;
+  return written > 0 ? decoder.decode(readFromWasm(outPtr, written)) : null;
 }
 
 /**
@@ -233,12 +237,16 @@ export async function layoutGraphWasm(
 
   const optsJson = JSON.stringify({ rankdir: options?.rankdir ?? "TB", engine: options?.engine ?? "dot" });
 
+  const nodesBytes = encoder.encode(nodesJson);
+  const edgesBytes = encoder.encode(edgesJson);
+  const groupsBytes = encoder.encode(groupsJson);
+  const optsBytes = encoder.encode(optsJson);
+
+  // Scale output buffer based on input size (~300 bytes per node + ~250 per edge)
+  const inputSize = nodesBytes.byteLength + edgesBytes.byteLength + groupsBytes.byteLength;
+  const outCap = Math.max(128 * 1024, inputSize * 4);
+
   wasmInstance.resetHeap();
-  const nodesBytes = new TextEncoder().encode(nodesJson);
-  const edgesBytes = new TextEncoder().encode(edgesJson);
-  const groupsBytes = new TextEncoder().encode(groupsJson);
-  const optsBytes = new TextEncoder().encode(optsJson);
-  const outCap = 128 * 1024;
   const nodesPtr = writeToWasm(nodesBytes);
   const edgesPtr = writeToWasm(edgesBytes);
   const groupsPtr = writeToWasm(groupsBytes);
@@ -255,7 +263,7 @@ export async function layoutGraphWasm(
   if (written === 0) return null;
 
   try {
-    const resultStr = new TextDecoder().decode(readFromWasm(outPtr, written));
+    const resultStr = decoder.decode(readFromWasm(outPtr, written));
     const result = WasmLayoutOutputSchema.parse(JSON.parse(resultStr));
 
     // Build edge routes map
@@ -296,7 +304,8 @@ export async function layoutGraphWasm(
     }
 
     return { nodes: result.nodes, edgeRoutes, groupBounds: result.groups };
-  } catch {
+  } catch (e) {
+    if (typeof process !== "undefined") process.stderr.write(`[drawmode] WASM layout failed: ${e}\n`);
     return null;
   }
 }
