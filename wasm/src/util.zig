@@ -161,6 +161,7 @@ pub fn extractIntField(obj: []const u8, field: []const u8) ?i32 {
             if (j >= obj.len or obj[j] < '0' or obj[j] > '9') return null;
             var val: i32 = 0;
             while (j < obj.len and obj[j] >= '0' and obj[j] <= '9') : (j += 1) {
+                // Saturating arithmetic: clamps on overflow (values > i32 max)
                 val = val *| 10 +| @as(i32, @intCast(obj[j] - '0'));
             }
             // Skip decimal portion for floats (e.g., "100.5" → 100)

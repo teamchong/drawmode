@@ -51,7 +51,7 @@ pub fn routeArrows(elements_json: []const u8, out: []u8) !usize {
         const tgt = to_shape.?;
 
         // Get stagger info for this arrow
-        const src_idx = findShapeIdx(shapes[0..shape_count], arrow.from_id) orelse 0;
+        const src_idx = findShapeIdx(shapes[0..shape_count], arrow.from_id) orelse continue;
         const total_out = out_counts[src_idx];
         const edge_idx = out_indexes[src_idx];
         out_indexes[src_idx] += 1;

@@ -23,6 +23,7 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
     var groups: [MAX_GROUPS]Group = undefined;
     var group_count: usize = 0;
     if (groups_json.len > 2) { // not empty "[]"
+        // Groups are optional — skip silently if JSON is malformed
         group_count = parseGroups(groups_json, &groups) catch 0;
     }
 
@@ -43,8 +44,7 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
 
     // Ortho routing produces looping arrows with rankdir=LR/RL;
     // use curved splines for horizontal directions, ortho for vertical.
-    const is_horizontal = (rankdir_slice.len >= 2 and rankdir_slice[0] == 'L') or
-        (rankdir_slice.len >= 2 and rankdir_slice[0] == 'R' and rankdir_slice[1] == 'L');
+    const is_horizontal = std.mem.eql(u8, rankdir_slice, "LR") or std.mem.eql(u8, rankdir_slice, "RL");
     if (is_horizontal) {
         c.gviz_set_graph_attr(graph, "splines", "true");
     } else {
