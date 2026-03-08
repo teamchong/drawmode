@@ -93,7 +93,71 @@ The pattern has two parts:
 
 The SDK is the compression layer. The decompiler makes it lossless. Together they give LLMs a compact, editable, native representation of any structured data — without the lossy tradeoffs of RAG or summarization.
 
-## drawmode as proof of concept
+## Real examples from the `*mode` family
+
+### drawmode — diagrams as code
+
+The original proof of concept. 50 nodes worth of Excalidraw JSON compressed to ~10 lines of TypeScript:
+
+```
+Raw Excalidraw JSON (per node):
+{"type":"rectangle","x":100,"y":200,"width":180,"height":80,
+ "backgroundColor":"#d0bfff","strokeColor":"#7048e8",
+ "boundElements":[{"type":"text","id":"text_1"}],
+ "roundness":{"type":3},"strokeWidth":2,...}
+{"type":"text","text":"API Gateway","containerId":"rect_1",
+ "verticalAlign":"middle","textAlign":"center",...}
+                                                    ~50 lines × 50 nodes = ~2,500 lines
+
+drawmode SDK (per node):
+const api = d.addBox("API Gateway", { color: "backend" });
+                                                    1 line × 50 nodes = 50 lines
+```
+
+| | Raw JSON | drawmode code |
+|--|----------|---------------|
+| 50-node diagram | ~100KB / ~25,000 tokens | ~2KB / ~500 tokens |
+| Compression | | **~50x** |
+| Valid by construction | No — dozens of invariants | Yes — SDK enforces all |
+| Editable | Impractical | Natural |
+
+### querymode — data queries as code
+
+[querymode](https://github.com/teamchong/querymode) applies the same pattern to data querying. Instead of dumping raw query results or SQL schemas into the context window, the agent writes fluent query builder code:
+
+```
+Raw approach — dump data into context:
+"Here are the 500 rows from the orders table as JSON..."
+[{"id":1,"user_id":42,"amount":299.99,"category":"Electronics","status":"shipped",...},
+ {"id":2,"user_id":17,"amount":49.50,"category":"Books","status":"delivered",...},
+ ... 498 more rows ...]
+                                                    ~500 rows × ~100 tokens = ~50,000 tokens
+
+querymode fluent builder:
+const top5 = await qm
+  .table("orders.parquet")
+  .filter("category", "eq", "Electronics")
+  .filter("amount", "gte", 100)
+  .sort("amount", "desc")
+  .limit(5)
+  .collect()
+                                                    ~7 lines = ~50 tokens
+```
+
+The agent doesn't need the raw data in context — it expresses **intent** as code, and the query engine handles execution. The context cost drops from tens of thousands of tokens to under 100.
+
+### The pattern in both
+
+| | Raw data in context | Code-first |
+|--|---------------------|------------|
+| **drawmode** | 25,000 tokens of JSON | 500 tokens of SDK calls |
+| **querymode** | 50,000 tokens of rows | 50 tokens of query builder |
+| **What changes** | Format (JSON → code) | Nothing else — same data, same results |
+| **What improves** | Context cost, correctness, editability | All three, simultaneously |
+
+The compression isn't lossy — it's **semantic**. Code expresses the same information in fewer tokens because variable names, method chains, and type signatures carry meaning that raw data spells out explicitly.
+
+## The proof
 
 drawmode is a working proof of this thesis. The numbers:
 
@@ -103,4 +167,4 @@ drawmode is a working proof of this thesis. The numbers:
 - **Shared styles** — `toCode()` automatically extracts repeated patterns into variables
 - **Zero prompt engineering** — the SDK's type definitions are the only instruction the LLM needs
 
-If this pattern works for diagrams, it can work for any structured domain where LLMs currently struggle with raw data formats.
+If this pattern works for diagrams and data queries, it can work for any structured domain where LLMs currently struggle with raw data formats.

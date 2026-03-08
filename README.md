@@ -441,7 +441,14 @@ The `draw_describe` tool and `toCode()` method close the loop: they convert exis
 
 This pattern generalizes beyond diagrams. For any domain where LLMs currently consume raw data (JSON configs, database schemas, API responses, infrastructure state), you can build an SDK + decompiler that converts data into code. The SDK is the compression layer. The decompiler (`toCode()`) makes it bidirectional.
 
-drawmode is a proof of concept for **code-first context management** -- the idea that well-designed SDKs can replace RAG, chunking, and summarization for fitting structured data into LLM context windows.
+The [`*mode` family](https://github.com/teamchong) proves this across multiple domains:
+
+| Project | Raw data in context | Code-first | Compression |
+|---------|---------------------|------------|-------------|
+| **drawmode** | 25,000 tokens (Excalidraw JSON) | 500 tokens (SDK calls) | ~50x |
+| **[querymode](https://github.com/teamchong/querymode)** | 50,000 tokens (data rows) | 50 tokens (fluent builder) | ~1000x |
+
+drawmode is a proof of concept for **code-first context management** -- the idea that well-designed SDKs can replace RAG, chunking, and summarization for fitting structured data into LLM context windows. Read more in the [Code-First Context Management](https://teamchong.github.io/drawmode/code-first/) docs.
 
 ## License
 
