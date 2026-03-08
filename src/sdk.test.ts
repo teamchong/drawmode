@@ -899,6 +899,81 @@ describe("Diagram SDK", () => {
     expect(pts1).not.toBe(pts2);
   });
 
+  // ── toCode() — diagram to TypeScript ──
+
+  it("toCode produces valid TypeScript that includes all nodes and edges", () => {
+    const d = new Diagram({ direction: "LR" });
+    const api = d.addBox("API Gateway", { color: "backend" });
+    const db = d.addBox("Postgres", { color: "database" });
+    const cache = d.addBox("Redis", { color: "cache" });
+    d.connect(api, db, "queries");
+    d.connect(api, cache, "reads", { style: "dashed" });
+    d.addGroup("Data Layer", [db, cache]);
+
+    const code = d.toCode();
+    expect(code).toContain('new Diagram({ direction: "LR" })');
+    expect(code).toContain('"API Gateway"');
+    expect(code).toContain('"Postgres"');
+    expect(code).toContain('"Redis"');
+    expect(code).toContain('color: "backend"');
+    expect(code).toContain('color: "database"');
+    expect(code).toContain('color: "cache"');
+    expect(code).toContain('"queries"');
+    expect(code).toContain('style: "dashed"');
+    expect(code).toContain('"Data Layer"');
+    expect(code).toContain("d.render(");
+  });
+
+  it("toCode generates readable variable names from labels", () => {
+    const d = new Diagram();
+    d.addBox("API Gateway", { color: "backend" });
+    d.addBox("User Service", { color: "backend" });
+    const code = d.toCode();
+    expect(code).toContain("const apiGateway = ");
+    expect(code).toContain("const userService = ");
+  });
+
+  it("toCode reverse-maps hex colors to presets", () => {
+    const d = new Diagram();
+    d.addBox("DB", { color: "database" });
+    const code = d.toCode();
+    expect(code).toContain('color: "database"');
+    expect(code).not.toContain("#b2f2bb"); // hex should not appear
+  });
+
+  it("toCode round-trips through fromFile", async () => {
+    const d1 = new Diagram();
+    d1.addBox("Service A", { color: "backend" });
+    d1.addBox("Service B", { color: "frontend" });
+    d1.connect(d1.getNodes()[0], d1.getNodes()[1], "calls");
+
+    const tmpPath = "/tmp/drawmode-tocode-test.excalidraw";
+    await d1.render({ format: "excalidraw", path: tmpPath });
+
+    const d2 = await Diagram.fromFile(tmpPath);
+    const code = d2.toCode({ path: tmpPath });
+    expect(code).toContain('"Service A"');
+    expect(code).toContain('"Service B"');
+    expect(code).toContain('"calls"');
+    expect(code).toContain("d.connect(");
+    expect(code).toContain("d.render(");
+
+    try { await unlink(tmpPath); } catch { /* ok */ }
+  });
+
+  it("toCode handles sequence diagrams", () => {
+    const d = new Diagram({ type: "sequence" });
+    const user = d.addActor("User", { color: "users" });
+    const api = d.addActor("API", { color: "backend" });
+    d.message(user, api, "POST /login");
+
+    const code = d.toCode();
+    expect(code).toContain('type: "sequence"');
+    expect(code).toContain("d.addActor");
+    expect(code).toContain("d.message");
+    expect(code).toContain('"POST /login"');
+  });
+
   // ── Diagram diff summary ──
 
   const diffTestFile = "/tmp/drawmode-test-diff.excalidraw";

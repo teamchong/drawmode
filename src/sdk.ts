@@ -771,6 +771,229 @@ export class Diagram {
     return d;
   }
 
+  /**
+   * Generate TypeScript SDK code that reproduces this diagram.
+   * Reverse-maps hex colors to presets, generates readable variable names,
+   * and emits only non-default options to keep code minimal.
+   */
+  toCode(opts?: { path?: string }): string {
+    const lines: string[] = [];
+
+    // Build reverse color lookup: hex pair → preset name
+    const reverseColor = new Map<string, ColorPreset>();
+    for (const [preset, pair] of Object.entries(COLOR_PALETTE)) {
+      reverseColor.set(`${pair.background}|${pair.stroke}`, preset as ColorPreset);
+    }
+
+    // Generate readable variable names from labels
+    const varNames = new Map<string, string>();
+    const usedVars = new Set<string>();
+    const toVarName = (label: string, fallback: string): string => {
+      // Strip icon emoji prefix (first line if multi-line with emoji)
+      const cleanLabel = label.replace(/^[^\w\n]*\n/, "");
+      let name = cleanLabel
+        .replace(/[^a-zA-Z0-9\s]/g, "")
+        .trim()
+        .split(/\s+/)
+        .map((w, i) => i === 0 ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join("");
+      if (!name || /^\d/.test(name)) name = fallback;
+      // Deduplicate
+      const base = name;
+      let suffix = 2;
+      while (usedVars.has(name)) { name = `${base}${suffix++}`; }
+      usedVars.add(name);
+      return name;
+    };
+
+    // Detect color preset from node's color pair
+    const detectPreset = (color: { background: string; stroke: string }): ColorPreset | undefined => {
+      return reverseColor.get(`${color.background}|${color.stroke}`);
+    };
+
+    // Build minimal ShapeOpts (only non-default fields)
+    const buildShapeOpts = (node: GraphNode): Record<string, unknown> => {
+      const o: Record<string, unknown> = {};
+      const storedOpts = node.opts;
+      if (storedOpts?.row !== undefined) o.row = storedOpts.row;
+      if (storedOpts?.col !== undefined) o.col = storedOpts.col;
+      const preset = detectPreset(node.color);
+      if (preset) o.color = preset;
+      if (storedOpts?.x !== undefined) o.x = storedOpts.x;
+      if (storedOpts?.y !== undefined) o.y = storedOpts.y;
+      if (storedOpts?.width) o.width = storedOpts.width;
+      if (storedOpts?.height) o.height = storedOpts.height;
+      // Only emit hex colors if no preset matched
+      if (!preset) {
+        if (storedOpts?.backgroundColor) o.backgroundColor = storedOpts.backgroundColor;
+        if (storedOpts?.strokeColor) o.strokeColor = storedOpts.strokeColor;
+      }
+      if (storedOpts?.fillStyle && storedOpts.fillStyle !== "solid") o.fillStyle = storedOpts.fillStyle;
+      if (storedOpts?.strokeWidth && storedOpts.strokeWidth !== 2) o.strokeWidth = storedOpts.strokeWidth;
+      if (storedOpts?.strokeStyle && storedOpts.strokeStyle !== "solid") o.strokeStyle = storedOpts.strokeStyle;
+      if (storedOpts?.roughness !== undefined && storedOpts.roughness !== 1) o.roughness = storedOpts.roughness;
+      if (storedOpts?.opacity !== undefined && storedOpts.opacity !== 100) o.opacity = storedOpts.opacity;
+      if (storedOpts?.fontSize && storedOpts.fontSize !== 16) o.fontSize = storedOpts.fontSize;
+      if (storedOpts?.fontFamily && storedOpts.fontFamily !== 1) o.fontFamily = storedOpts.fontFamily;
+      if (storedOpts?.textAlign && storedOpts.textAlign !== "center") o.textAlign = storedOpts.textAlign;
+      if (storedOpts?.verticalAlign && storedOpts.verticalAlign !== "middle") o.verticalAlign = storedOpts.verticalAlign;
+      if (storedOpts?.link) o.link = storedOpts.link;
+      if (storedOpts?.icon) o.icon = storedOpts.icon;
+      return o;
+    };
+
+    // Build minimal ConnectOpts
+    const buildConnectOpts = (edge: GraphEdge): Record<string, unknown> => {
+      const o: Record<string, unknown> = {};
+      const eo = edge.opts;
+      if (edge.style !== "solid") o.style = edge.style;
+      if (eo?.strokeColor) o.strokeColor = eo.strokeColor;
+      if (eo?.strokeWidth && eo.strokeWidth !== 2) o.strokeWidth = eo.strokeWidth;
+      if (eo?.startArrowhead !== undefined && eo.startArrowhead !== null) o.startArrowhead = eo.startArrowhead;
+      if (eo?.endArrowhead !== undefined && eo.endArrowhead !== "arrow") o.endArrowhead = eo.endArrowhead;
+      if (eo?.elbowed === false) o.elbowed = false;
+      if (eo?.labelFontSize && eo.labelFontSize !== 16) o.labelFontSize = eo.labelFontSize;
+      if (eo?.labelPosition && eo.labelPosition !== "middle") o.labelPosition = eo.labelPosition;
+      return o;
+    };
+
+    const stringify = (obj: Record<string, unknown>): string => {
+      const entries = Object.entries(obj);
+      if (entries.length === 0) return "";
+      // Pretty-print simple objects on one line
+      const parts = entries.map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
+      return `{ ${parts.join(", ")} }`;
+    };
+
+    // Constructor
+    const ctorOpts: Record<string, string> = {};
+    if (this.direction !== "TB") ctorOpts.direction = this.direction;
+    if (this.diagramType !== "architecture") ctorOpts.type = this.diagramType;
+    const ctorStr = Object.keys(ctorOpts).length > 0 ? stringify(ctorOpts) : "";
+    lines.push(`const d = new Diagram(${ctorStr});`);
+
+    // Sequence diagrams
+    if (this.diagramType === "sequence") {
+      lines.push("");
+      for (const actor of this.sequenceActors) {
+        const varName = toVarName(actor.label, `actor${actor.index}`);
+        varNames.set(actor.id, varName);
+        const shapeOpts = actor.opts ? buildShapeOpts({ id: actor.id, label: actor.label, type: "rectangle", width: 0, height: 0, color: { background: "", stroke: "" }, opts: actor.opts }) : {};
+        const optsStr = Object.keys(shapeOpts).length > 0 ? `, ${stringify(shapeOpts)}` : "";
+        lines.push(`const ${varName} = d.addActor(${JSON.stringify(actor.label)}${optsStr});`);
+      }
+      lines.push("");
+      for (const msg of this.sequenceMessages) {
+        const from = varNames.get(msg.from) ?? JSON.stringify(msg.from);
+        const to = varNames.get(msg.to) ?? JSON.stringify(msg.to);
+        const labelStr = msg.label ? `, ${JSON.stringify(msg.label)}` : "";
+        const co = msg.opts ? buildConnectOpts({ from: msg.from, to: msg.to, label: msg.label, style: msg.opts?.style ?? "solid", opts: msg.opts }) : {};
+        const optsStr = Object.keys(co).length > 0 ? `, ${stringify(co)}` : "";
+        // Need empty label arg if we have opts but no label
+        const args = optsStr && !labelStr ? `, undefined${optsStr}` : `${labelStr}${optsStr}`;
+        lines.push(`d.message(${from}, ${to}${args});`);
+      }
+    } else {
+      // Architecture diagrams: nodes, then groups, then edges
+      lines.push("");
+
+      // Emit nodes
+      for (const [id, node] of this.nodes) {
+        if (node.type === "line") {
+          const varName = toVarName(node.label || "line", "line");
+          varNames.set(id, varName);
+          const pts = node.linePoints ?? [];
+          const lineOpts: Record<string, unknown> = {};
+          if (node.opts?.strokeColor) lineOpts.strokeColor = node.opts.strokeColor;
+          if (node.opts?.strokeWidth) lineOpts.strokeWidth = node.opts.strokeWidth;
+          if (node.opts?.strokeStyle) lineOpts.strokeStyle = node.opts.strokeStyle;
+          const optsStr = Object.keys(lineOpts).length > 0 ? `, ${stringify(lineOpts)}` : "";
+          lines.push(`const ${varName} = d.addLine(${JSON.stringify(pts)}${optsStr});`);
+          continue;
+        }
+
+        const varName = toVarName(node.label, `node${this.idCounter}`);
+        varNames.set(id, varName);
+
+        if (node.type === "text") {
+          const textOpts: Record<string, unknown> = {};
+          if (node.absX !== undefined) textOpts.x = node.absX;
+          if (node.absY !== undefined) textOpts.y = node.absY;
+          if (node.opts?.fontSize && node.opts.fontSize !== 16) textOpts.fontSize = node.opts.fontSize;
+          if (node.opts?.fontFamily && node.opts.fontFamily !== 1) textOpts.fontFamily = node.opts.fontFamily;
+          const preset = detectPreset(node.color);
+          if (preset) textOpts.color = preset;
+          else if (node.color.stroke && node.color.stroke !== "#1e1e1e") textOpts.strokeColor = node.color.stroke;
+          const optsStr = Object.keys(textOpts).length > 0 ? `, ${stringify(textOpts)}` : "";
+          lines.push(`const ${varName} = d.addText(${JSON.stringify(node.label)}${optsStr});`);
+          continue;
+        }
+
+        const method = node.type === "ellipse" ? "addEllipse" : node.type === "diamond" ? "addDiamond" : "addBox";
+        const shapeOpts = buildShapeOpts(node);
+        // Strip icon emoji prefix from label (icon is emitted as an opt)
+        let codeLabel = node.label;
+        if (node.opts?.icon && codeLabel.includes("\n")) {
+          codeLabel = codeLabel.split("\n").slice(1).join("\n");
+        }
+        const optsStr = Object.keys(shapeOpts).length > 0 ? `, ${stringify(shapeOpts)}` : "";
+        lines.push(`const ${varName} = d.${method}(${JSON.stringify(codeLabel)}${optsStr});`);
+      }
+
+      // Emit groups
+      if (this.groups.size > 0) {
+        lines.push("");
+        for (const [id, group] of this.groups) {
+          const childVars = group.children.map(c => varNames.get(c) ?? `"${c}"`);
+          const groupOpts: Record<string, unknown> = {};
+          if (group.opts?.padding && group.opts.padding !== 30) groupOpts.padding = group.opts.padding;
+          if (group.opts?.strokeColor) groupOpts.strokeColor = group.opts.strokeColor;
+          if (group.opts?.strokeStyle && group.opts.strokeStyle !== "dashed") groupOpts.strokeStyle = group.opts.strokeStyle;
+          if (group.opts?.opacity !== undefined && group.opts.opacity !== 60) groupOpts.opacity = group.opts.opacity;
+          const optsStr = Object.keys(groupOpts).length > 0 ? `, ${stringify(groupOpts)}` : "";
+          const varName = toVarName(group.label, `group${this.idCounter}`);
+          varNames.set(id, varName);
+          lines.push(`const ${varName} = d.addGroup(${JSON.stringify(group.label)}, [${childVars.join(", ")}]${optsStr});`);
+        }
+      }
+
+      // Emit frames
+      if (this.frames.size > 0) {
+        lines.push("");
+        for (const [id, frame] of this.frames) {
+          const childVars = frame.children.map(c => varNames.get(c) ?? `"${c}"`);
+          const varName = toVarName(frame.name, `frame${this.idCounter}`);
+          varNames.set(id, varName);
+          lines.push(`d.addFrame(${JSON.stringify(frame.name)}, [${childVars.join(", ")}]);`);
+        }
+      }
+
+      // Emit edges
+      if (this.edges.length > 0) {
+        lines.push("");
+        for (const edge of this.edges) {
+          const from = varNames.get(edge.from) ?? `"${edge.from}"`;
+          const to = varNames.get(edge.to) ?? `"${edge.to}"`;
+          const co = buildConnectOpts(edge);
+          const labelStr = edge.label ? `, ${JSON.stringify(edge.label)}` : "";
+          const optsStr = Object.keys(co).length > 0 ? `, ${stringify(co)}` : "";
+          // Need empty label arg if we have opts but no label
+          const args = optsStr && !labelStr ? `, undefined${optsStr}` : `${labelStr}${optsStr}`;
+          lines.push(`d.connect(${from}, ${to}${args});`);
+        }
+      }
+    }
+
+    // Render
+    lines.push("");
+    const renderOpts: Record<string, unknown> = {};
+    if (opts?.path) renderOpts.path = opts.path;
+    const renderStr = Object.keys(renderOpts).length > 0 ? stringify(renderOpts) : "";
+    lines.push(`return d.render(${renderStr});`);
+
+    return lines.join("\n");
+  }
+
   /** Import a Mermaid graph definition. Supports graph TD/LR, nodes, edges, subgraphs. */
   static fromMermaid(syntax: string): Diagram {
     const d = new Diagram();
