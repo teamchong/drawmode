@@ -407,6 +407,42 @@ Graphviz (C library statically linked in the Zig WASM module):
 - **Cluster subgraphs** -- groups rendered as Graphviz clusters for proper containment
 - **Rank constraints** -- nodes with same `row` value are placed on the same rank
 
+## Why Code Mode?
+
+drawmode exists to prove a thesis: **code is the optimal serialization format for LLM context windows.**
+
+### The problem with JSON-first MCP tools
+
+The official Excalidraw MCP sends raw JSON to the LLM. A 50-node diagram is ~100KB / ~25,000 tokens of Excalidraw JSON. This blows up context windows, leaves less room for reasoning, and the LLM still produces broken output because Excalidraw JSON has dozens of non-obvious invariants (bound text elements need TWO elements, arrow endpoints must be on shape edges, elbow arrows need specific flag combinations, etc.).
+
+### Code as compression
+
+drawmode's approach: the LLM writes ~2KB of TypeScript SDK calls instead. Same 50-node diagram, ~500 tokens. That's a **50x compression ratio** -- and the code version is *more* useful because it's editable, diffable, and semantically meaningful.
+
+```
+JSON:   {"type":"rectangle","x":100,"y":200,"width":180,"height":80,
+         "backgroundColor":"#d0bfff","strokeColor":"#7048e8",
+         "boundElements":[{"type":"text","id":"text_1"}],...}  // 50+ lines per node
+
+Code:   const api = d.addBox("API Gateway", { color: "backend" });  // 1 line
+```
+
+This works because code has three properties that JSON lacks:
+
+1. **Semantic density** -- variable names carry meaning. `d.connect(api, db)` is self-documenting
+2. **Compositionality** -- loops, functions, and variables eliminate repetition
+3. **LLM-native** -- models have seen billions of lines of code during training. Code is a compression language they already understand
+
+### The `toCode()` decompiler
+
+The `draw_describe` tool and `toCode()` method close the loop: they convert existing Excalidraw JSON *back* to compact TypeScript. This means agents never need to read raw JSON -- they work entirely in code, even when editing existing diagrams.
+
+### The broader idea
+
+This pattern generalizes beyond diagrams. For any domain where LLMs currently consume raw data (JSON configs, database schemas, API responses, infrastructure state), you can build an SDK + decompiler that converts data into code. The SDK is the compression layer. The decompiler (`toCode()`) makes it bidirectional.
+
+drawmode is a proof of concept for **code-first context management** -- the idea that well-designed SDKs can replace RAG, chunking, and summarization for fitting structured data into LLM context windows.
+
 ## License
 
 MIT

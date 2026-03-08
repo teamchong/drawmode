@@ -1,0 +1,106 @@
+---
+title: Code-First Context Management
+description: Why code is the optimal serialization format for LLM context windows — the thesis drawmode exists to prove.
+---
+
+drawmode exists to prove a thesis: **code is the optimal serialization format for LLM context windows.**
+
+## The problem
+
+The official Excalidraw MCP sends raw JSON to the LLM. A 50-node architecture diagram produces ~100KB / ~25,000 tokens of Excalidraw JSON. This creates three problems:
+
+1. **Context window bloat** — 25K tokens for one diagram leaves little room for reasoning, conversation history, or other tools
+2. **Broken output** — Excalidraw JSON has dozens of non-obvious invariants (bound text elements need TWO elements, arrow endpoints must land on shape edges, elbow arrows need specific flag combinations). LLMs frequently violate these
+3. **No edit path** — to modify a diagram, the LLM must re-read the full JSON, understand it, and re-emit it. The read alone can exceed context
+
+RAG, chunking, and summarization are common solutions to "too much data for the context window." But they're lossy — you get fragments, not the full picture. And retrieval can miss relevant pieces.
+
+## Code as compression
+
+drawmode's approach: the LLM writes TypeScript SDK calls instead of raw JSON.
+
+| Format | 50-node diagram | Tokens (~) |
+|--------|----------------|------------|
+| Excalidraw JSON | ~100KB | ~25,000 |
+| drawmode TypeScript | ~2KB | ~500 |
+| **Compression ratio** | | **~50x** |
+
+And the code version is *more* useful — it's editable, diffable, and semantically meaningful.
+
+```
+// JSON: 50+ lines per node
+{"type":"rectangle","x":100,"y":200,"width":180,"height":80,
+ "backgroundColor":"#d0bfff","strokeColor":"#7048e8",
+ "boundElements":[{"type":"text","id":"text_1"}],...}
+
+// Code: 1 line per node
+const api = d.addBox("API Gateway", { color: "backend" });
+```
+
+### Why code has special properties
+
+Code works as LLM compression because of three properties that raw data formats lack:
+
+**Semantic density.** Variable names carry meaning without extra tokens. When you write `d.connect(api, db, "queries")`, the LLM understands the relationship from the names alone. JSON requires you to spell out IDs, coordinates, and bindings explicitly.
+
+**Compositionality.** Loops, functions, and variables eliminate repetition. 100 similar nodes in JSON = 100x the tokens. In code = a loop + a template. drawmode's `toCode()` automatically extracts shared styles:
+
+```typescript
+// 5 backend services share a style — extracted automatically
+const backendStyle = { color: "backend" };
+
+const api = d.addBox("API Gateway", { ...backendStyle, row: 0, col: 2 });
+const auth = d.addBox("Auth Service", { ...backendStyle, row: 1, col: 0 });
+const users = d.addBox("User Service", { ...backendStyle, row: 1, col: 1 });
+const orders = d.addBox("Order Service", { ...backendStyle, row: 1, col: 2 });
+const notify = d.addBox("Notification", { ...backendStyle, row: 1, col: 3 });
+```
+
+**LLM-native format.** Models have been trained on billions of lines of code. Code is a compression language they already understand deeply — they don't just parse it, they understand the *intent*. JSON is data. Code is intent.
+
+## The `toCode()` decompiler
+
+The key innovation that makes code-first bidirectional: `toCode()` converts existing Excalidraw JSON *back* to compact TypeScript. This means agents never need to read raw JSON — they work entirely in code, even when editing existing diagrams.
+
+The `draw_describe` MCP tool exposes this:
+
+```
+1. Agent calls draw_describe("architecture.excalidraw")
+2. Gets back ~500 tokens of TypeScript (not ~25,000 tokens of JSON)
+3. Modifies the code
+4. Passes it to the draw tool
+```
+
+The sidecar `.drawmode.ts` file is also generated on every render, so agents can read the TypeScript source directly without calling `draw_describe`.
+
+## The broader pattern
+
+This approach generalizes beyond diagrams. For any domain where LLMs currently consume raw data, you can build an **SDK + decompiler** that converts data into code:
+
+| Domain | Raw data | Code-first |
+|--------|----------|------------|
+| Diagrams | Excalidraw JSON (100KB) | TypeScript SDK calls (2KB) |
+| Database | Schema dump / rows | Migration code / query builder |
+| Infrastructure | CloudFormation JSON | Terraform / Pulumi |
+| UI state | DOM / component tree | JSX |
+| API responses | JSON payloads | SDK client calls |
+| Config | YAML / JSON | Builder pattern |
+
+The pattern has two parts:
+
+1. **SDK** — a typed API that represents the domain, producing valid output by construction
+2. **Decompiler** (`toCode()`) — converts raw data back into SDK calls, making it bidirectional
+
+The SDK is the compression layer. The decompiler makes it lossless. Together they give LLMs a compact, editable, native representation of any structured data — without the lossy tradeoffs of RAG or summarization.
+
+## drawmode as proof of concept
+
+drawmode is a working proof of this thesis. The numbers:
+
+- **50x context compression** vs. raw Excalidraw JSON
+- **100% correctness** — SDK enforces structural validity, Graphviz handles layout
+- **Bidirectional** — `toCode()` converts any `.excalidraw` file back to TypeScript
+- **Shared styles** — `toCode()` automatically extracts repeated patterns into variables
+- **Zero prompt engineering** — the SDK's type definitions are the only instruction the LLM needs
+
+If this pattern works for diagrams, it can work for any structured domain where LLMs currently struggle with raw data formats.

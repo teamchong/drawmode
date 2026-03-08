@@ -904,6 +904,48 @@ export class Diagram {
       // Architecture diagrams: nodes, then groups, then edges
       lines.push("");
 
+      // Extract shared styles: group nodes by their non-positional opts (color, icon, etc.)
+      // Only extract when 3+ nodes share the same style (otherwise spread syntax adds tokens)
+      const styleGroups = new Map<string, { style: Record<string, unknown>; name: string }>();
+      const nodeStyleKeys = new Map<string, string>(); // node id → style key
+      const shapeNodes = [...this.nodes.entries()].filter(([, n]) => n.type !== "line" && n.type !== "text");
+
+      for (const [id, node] of shapeNodes) {
+        const full = buildShapeOpts(node);
+        // Separate positional from style properties
+        const style: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(full)) {
+          if (k !== "row" && k !== "col" && k !== "x" && k !== "y" && k !== "width" && k !== "height") {
+            style[k] = v;
+          }
+        }
+        if (Object.keys(style).length > 0) {
+          const key = JSON.stringify(style);
+          nodeStyleKeys.set(id, key);
+          if (!styleGroups.has(key)) {
+            // Generate style variable name from the most common property
+            const colorVal = style.color as string | undefined;
+            const styleName = colorVal ? `${colorVal}Style` : `style${styleGroups.size + 1}`;
+            styleGroups.set(key, { style, name: styleName });
+          }
+        }
+      }
+
+      // Emit shared style variables (only for groups with 3+ members)
+      const styleKeyCounts = new Map<string, number>();
+      for (const key of nodeStyleKeys.values()) {
+        styleKeyCounts.set(key, (styleKeyCounts.get(key) ?? 0) + 1);
+      }
+      const emittedStyles = new Set<string>();
+      for (const [key, count] of styleKeyCounts) {
+        if (count >= 3) {
+          const sg = styleGroups.get(key)!;
+          lines.push(`const ${sg.name} = ${stringify(sg.style)};`);
+          emittedStyles.add(key);
+        }
+      }
+      if (emittedStyles.size > 0) lines.push("");
+
       // Emit nodes
       for (const [id, node] of this.nodes) {
         if (node.type === "line") {
@@ -937,14 +979,36 @@ export class Diagram {
         }
 
         const method = node.type === "ellipse" ? "addEllipse" : node.type === "diamond" ? "addDiamond" : "addBox";
-        const shapeOpts = buildShapeOpts(node);
         // Strip icon emoji prefix from label (icon is emitted as an opt)
         let codeLabel = node.label;
         if (node.opts?.icon && codeLabel.includes("\n")) {
           codeLabel = codeLabel.split("\n").slice(1).join("\n");
         }
-        const optsStr = Object.keys(shapeOpts).length > 0 ? `, ${stringify(shapeOpts)}` : "";
-        lines.push(`const ${varName} = d.${method}(${JSON.stringify(codeLabel)}${optsStr});`);
+
+        // Use shared style variable if this node's style was extracted
+        const styleKey = nodeStyleKeys.get(id);
+        if (styleKey && emittedStyles.has(styleKey)) {
+          const sg = styleGroups.get(styleKey)!;
+          const full = buildShapeOpts(node);
+          // Keep only positional properties inline
+          const positional: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(full)) {
+            if (k === "row" || k === "col" || k === "x" || k === "y" || k === "width" || k === "height") {
+              positional[k] = v;
+            }
+          }
+          const posStr = Object.keys(positional).length > 0
+            ? Object.entries(positional).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(", ")
+            : "";
+          const optsStr = posStr
+            ? `, { ...${sg.name}, ${posStr} }`
+            : `, ${sg.name}`;
+          lines.push(`const ${varName} = d.${method}(${JSON.stringify(codeLabel)}${optsStr});`);
+        } else {
+          const shapeOpts = buildShapeOpts(node);
+          const optsStr = Object.keys(shapeOpts).length > 0 ? `, ${stringify(shapeOpts)}` : "";
+          lines.push(`const ${varName} = d.${method}(${JSON.stringify(codeLabel)}${optsStr});`);
+        }
       }
 
       // Emit groups

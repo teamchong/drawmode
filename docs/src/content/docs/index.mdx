@@ -46,9 +46,11 @@ Traditional MCP diagram tools ask the LLM to produce raw Excalidraw JSON — hun
 drawmode flips the approach: the LLM writes **~10 lines of TypeScript** against a typed SDK. The SDK handles all the Excalidraw complexity (labels need two elements, arrows need binding math, elbow routing needs specific flags). Graphviz handles layout. The result is always valid.
 
 ```
-Traditional:  LLM → 500 lines of JSON → broken diagrams
-drawmode:     LLM → 10 lines of TypeScript → SDK + Graphviz → valid diagrams
+Traditional:  LLM → 500 lines of JSON (~25,000 tokens) → broken diagrams
+drawmode:     LLM → 10 lines of TypeScript (~500 tokens) → SDK + Graphviz → valid diagrams
 ```
+
+This **~50x context compression** is not accidental — it's the core thesis. Code is the optimal serialization format for LLM context windows because it's semantically dense, composable, and LLM-native. Read more in [Code-First Context Management](/drawmode/code-first/).
 
 ## Quick Example
 
