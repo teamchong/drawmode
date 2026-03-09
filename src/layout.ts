@@ -63,6 +63,19 @@ let wasmInstance: WasmLayoutExports | null = null;
 let wasmLock: Promise<void> = Promise.resolve();
 let wasmLoadPromise: Promise<void> | null = null;
 
+/** Serialize access to WASM — bump allocator is not concurrent-safe. */
+async function withWasmLock<T>(fn: () => T): Promise<T> {
+  const prev = wasmLock;
+  let resolve!: () => void;
+  wasmLock = new Promise(r => { resolve = r; });
+  await prev;
+  try {
+    return fn();
+  } finally {
+    resolve();
+  }
+}
+
 const WasmLayoutOutputSchema = z.object({
   nodes: z.array(z.object({ id: z.string(), x: z.number(), y: z.number() })),
   edges: z.array(z.object({
@@ -223,24 +236,15 @@ export async function layoutGraphWasm(
   options?: { rankdir?: string; engine?: string },
 ): Promise<WasmLayoutResult | null> {
   if (!wasmInstance) return null;
-
-  // Serialize WASM calls — bump allocator is not concurrent-safe
-  let unlock: () => void;
-  const prev = wasmLock;
-  wasmLock = new Promise(resolve => { unlock = resolve; });
-  await prev;
-
-  try {
-    return await layoutGraphWasmInner(nodes, edges, groups, options);
-  } finally { unlock!(); }
+  return withWasmLock(() => layoutGraphWasmInner(nodes, edges, groups, options));
 }
 
-async function layoutGraphWasmInner(
+function layoutGraphWasmInner(
   nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number; type?: string }[],
   edges: { from: string; to: string; label?: string }[],
   groups?: { id: string; label: string; children: string[]; parent?: string }[],
   options?: { rankdir?: string; engine?: string },
-): Promise<WasmLayoutResult | null> {
+): WasmLayoutResult | null {
   if (!wasmInstance) return null;
 
   const nodesJson = JSON.stringify(
@@ -339,29 +343,21 @@ async function layoutGraphWasmInner(
 /** Validate Excalidraw elements. Returns validation errors JSON, or null. */
 export async function validateElements(elementsJson: string): Promise<string | null> {
   if (!wasmInstance) return null;
-  let unlock: () => void;
-  const prev = wasmLock;
-  wasmLock = new Promise(resolve => { unlock = resolve; });
-  await prev;
-  try {
-    return callWasmSync(wasmInstance!.validate.bind(wasmInstance), elementsJson, 16 * 1024);
-  } finally { unlock!(); }
+  return withWasmLock(() =>
+    callWasmSync(wasmInstance!.validate.bind(wasmInstance), elementsJson, 16 * 1024),
+  );
 }
 
 /** Compress data using zlib format (matching pako.deflate). Returns compressed bytes or null. */
 export async function zlibCompress(data: Uint8Array): Promise<Uint8Array | null> {
   if (!wasmInstance) return null;
-  let unlock: () => void;
-  const prev = wasmLock;
-  wasmLock = new Promise(resolve => { unlock = resolve; });
-  await prev;
-  try {
+  return withWasmLock(() => {
     wasmInstance!.resetHeap();
     const inPtr = writeToWasm(data);
     const outCap = data.byteLength + 1024; // compressed + zlib overhead
     const outPtr = wasmInstance!.alloc(outCap);
     const written = wasmInstance!.zlibCompress(inPtr, data.byteLength, outPtr, outCap);
     return written > 0 ? readFromWasm(outPtr, written) : null;
-  } finally { unlock!(); }
+  });
 }
 

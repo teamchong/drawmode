@@ -2372,18 +2372,17 @@ export class Diagram {
     const wasmEdges = this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
     // Resolve nested groups: detect which children are group IDs and set parent relationships
     const groupIds = new Set(this.groups.keys());
+    // Pre-compute child→parent map for O(1) parent lookup
+    const childToParent = new Map<string, string>();
+    for (const [pid, pg] of this.groups) {
+      for (const child of pg.children) {
+        if (groupIds.has(child)) childToParent.set(child, pid);
+      }
+    }
     const wasmGroups = Array.from(this.groups.entries()).map(([id, g]) => {
       // Separate node children from group children
       const nodeChildren = g.children.filter(c => !groupIds.has(c));
-      // Find parent: if this group is a child of another group
-      let parent: string | undefined;
-      for (const [pid, pg] of this.groups) {
-        if (pid !== id && pg.children.includes(id)) {
-          parent = pid;
-          break;
-        }
-      }
-      return { id, label: g.label, children: nodeChildren, parent };
+      return { id, label: g.label, children: nodeChildren, parent: childToParent.get(id) };
     });
 
     const result = await layoutGraphWasm(wasmNodes, wasmEdges, wasmGroups.length > 0 ? wasmGroups : undefined, { rankdir: this.direction, engine: allAbsolute ? "nop2" : "dot" });
