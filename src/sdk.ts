@@ -586,9 +586,12 @@ export class Diagram {
     const raw = await readFile(path, "utf-8");
     const parsed = ExcalidrawFileSchema.safeParse(JSON.parse(raw));
     if (!parsed.success) throw new Error(`Invalid .excalidraw file: ${parsed.error.message}`);
-    const elements = parsed.data.elements;
+    return Diagram.fromElements(parsed.data.elements);
+  }
 
-    const d = new this();
+  /** Reconstruct a Diagram from raw Excalidraw elements (no filesystem needed). */
+  static fromElements(elements: ExcalidrawElement[]): Diagram {
+    const d = new Diagram();
 
     // Index text elements by containerId for label lookup
     const textByContainer = new Map<string, ExcalidrawElement>();

@@ -55,6 +55,7 @@ declare class Diagram {
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void;
 
   static fromFile(path: string): Promise<Diagram>;
+  static fromElements(elements: object[]): Diagram;
   static fromMermaid(syntax: string): Diagram;
   toCode(opts?: { path?: string }): string;  // convert diagram state to TypeScript SDK code
   findByLabel(label: string, opts?: { exact?: boolean }): string[];

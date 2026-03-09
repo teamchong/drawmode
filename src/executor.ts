@@ -49,14 +49,20 @@ export async function executeCode(
       })();
     `;
 
-    const fn = new Function("Diagram", wrappedCode);
+    // Shadow dangerous globals so generated code can only use the Diagram API.
+    // new Function() has access to global scope; shadowing with undefined blocks it.
+    const fn = new Function(
+      "Diagram",
+      "fetch", "globalThis", "self", "process", "require",
+      wrappedCode,
+    );
 
     // 60s timeout — prevents infinite loops / stuck awaits from hanging forever
     const TIMEOUT_MS = 60_000;
     let timer: ReturnType<typeof setTimeout>;
     try {
       const result = await Promise.race([
-        fn(ConfiguredDiagram),
+        fn(ConfiguredDiagram, undefined, undefined, undefined, undefined, undefined),
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error(`Execution timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS);
         }),

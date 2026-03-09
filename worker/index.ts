@@ -125,6 +125,29 @@ Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omit
   );
 
   server.tool(
+    "draw_describe",
+    `Convert Excalidraw JSON to editable TypeScript code.
+Returns compact SDK code that recreates the diagram — much smaller than raw JSON.
+Use this instead of reading .excalidraw JSON directly. Then modify the code and pass it to the draw tool.`,
+    {
+      json: z.string().describe("Excalidraw JSON string (the full .excalidraw file contents)"),
+    },
+    async ({ json }) => {
+      try {
+        const { Diagram } = await import("../src/sdk.js");
+        const parsed = JSON.parse(json);
+        const elements = parsed.elements ?? parsed;
+        const d = Diagram.fromElements(elements);
+        const code = d.toCode();
+        return { content: [{ type: "text" as const, text: code }] };
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
     "draw_info",
     "Get information about drawmode capabilities, color presets, and SDK reference.",
     {},
