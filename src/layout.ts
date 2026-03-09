@@ -60,6 +60,8 @@ interface WasmLayoutExports {
 }
 
 let wasmInstance: WasmLayoutExports | null = null;
+let wasmLock: Promise<void> = Promise.resolve();
+let wasmLoadPromise: Promise<void> | null = null;
 
 const WasmLayoutOutputSchema = z.object({
   nodes: z.array(z.object({ id: z.string(), x: z.number(), y: z.number() })),
@@ -157,21 +159,26 @@ async function initWasm(source: BufferSource | WebAssembly.Module): Promise<void
  * - BufferSource: compiles and instantiates (any runtime)
  */
 export async function loadWasm(source?: string | WebAssembly.Module | BufferSource): Promise<void> {
-  try {
-    if (source instanceof WebAssembly.Module || source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
-      await initWasm(source);
-    } else {
-      const { readFile } = await import("node:fs/promises");
-      const { join } = await import("node:path");
-      const dir = await getDirname();
-      const path = source ?? join(dir, "..", "wasm", "zig-out", "bin", "drawmode.wasm");
-      const bytes = await readFile(path);
-      await initWasm(bytes);
+  if (wasmLoadPromise) return wasmLoadPromise;
+  wasmLoadPromise = (async () => {
+    try {
+      if (source instanceof WebAssembly.Module || source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
+        await initWasm(source);
+      } else {
+        const { readFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const dir = await getDirname();
+        const path = source ?? join(dir, "..", "wasm", "zig-out", "bin", "drawmode.wasm");
+        const bytes = await readFile(path);
+        await initWasm(bytes);
+      }
+    } catch (e) {
+      if (typeof process !== "undefined") process.stderr.write(`[drawmode] WASM load failed: ${e}\n`);
+      wasmInstance = null;
+      wasmLoadPromise = null; // allow retry on failure
     }
-  } catch (e) {
-    if (typeof process !== "undefined") process.stderr.write(`[drawmode] WASM load failed: ${e}\n`);
-    wasmInstance = null;
-  }
+  })();
+  return wasmLoadPromise;
 }
 
 export function isWasmLoaded(): boolean {
@@ -191,7 +198,7 @@ function readFromWasm(ptr: number, len: number): Uint8Array {
 }
 
 /** Call a single-input WASM function: encode JSON → call → decode result. */
-function callWasm(
+function callWasmSync(
   fn: (inPtr: number, inLen: number, outPtr: number, outCap: number) => number,
   inputJson: string,
   outCap: number,
@@ -210,6 +217,25 @@ function callWasm(
  * Returns positioned nodes and edge routes with orthogonal routing points.
  */
 export async function layoutGraphWasm(
+  nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number; type?: string }[],
+  edges: { from: string; to: string; label?: string }[],
+  groups?: { id: string; label: string; children: string[]; parent?: string }[],
+  options?: { rankdir?: string; engine?: string },
+): Promise<WasmLayoutResult | null> {
+  if (!wasmInstance) return null;
+
+  // Serialize WASM calls — bump allocator is not concurrent-safe
+  let unlock: () => void;
+  const prev = wasmLock;
+  wasmLock = new Promise(resolve => { unlock = resolve; });
+  await prev;
+
+  try {
+    return await layoutGraphWasmInner(nodes, edges, groups, options);
+  } finally { unlock!(); }
+}
+
+async function layoutGraphWasmInner(
   nodes: { id: string; width: number; height: number; row?: number; col?: number; absX?: number; absY?: number; type?: string }[],
   edges: { from: string; to: string; label?: string }[],
   groups?: { id: string; label: string; children: string[]; parent?: string }[],
@@ -311,19 +337,31 @@ export async function layoutGraphWasm(
 }
 
 /** Validate Excalidraw elements. Returns validation errors JSON, or null. */
-export function validateElements(elementsJson: string): string | null {
+export async function validateElements(elementsJson: string): Promise<string | null> {
   if (!wasmInstance) return null;
-  return callWasm(wasmInstance.validate.bind(wasmInstance), elementsJson, 16 * 1024);
+  let unlock: () => void;
+  const prev = wasmLock;
+  wasmLock = new Promise(resolve => { unlock = resolve; });
+  await prev;
+  try {
+    return callWasmSync(wasmInstance!.validate.bind(wasmInstance), elementsJson, 16 * 1024);
+  } finally { unlock!(); }
 }
 
 /** Compress data using zlib format (matching pako.deflate). Returns compressed bytes or null. */
-export function zlibCompress(data: Uint8Array): Uint8Array | null {
+export async function zlibCompress(data: Uint8Array): Promise<Uint8Array | null> {
   if (!wasmInstance) return null;
-  wasmInstance.resetHeap();
-  const inPtr = writeToWasm(data);
-  const outCap = data.byteLength + 1024; // compressed + zlib overhead
-  const outPtr = wasmInstance.alloc(outCap);
-  const written = wasmInstance.zlibCompress(inPtr, data.byteLength, outPtr, outCap);
-  return written > 0 ? readFromWasm(outPtr, written) : null;
+  let unlock: () => void;
+  const prev = wasmLock;
+  wasmLock = new Promise(resolve => { unlock = resolve; });
+  await prev;
+  try {
+    wasmInstance!.resetHeap();
+    const inPtr = writeToWasm(data);
+    const outCap = data.byteLength + 1024; // compressed + zlib overhead
+    const outPtr = wasmInstance!.alloc(outCap);
+    const written = wasmInstance!.zlibCompress(inPtr, data.byteLength, outPtr, outCap);
+    return written > 0 ? readFromWasm(outPtr, written) : null;
+  } finally { unlock!(); }
 }
 

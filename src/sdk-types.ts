@@ -25,7 +25,7 @@ interface ShapeOpts {
   fontSize?: number; fontFamily?: FontFamily;
   textAlign?: "left" | "center" | "right"; verticalAlign?: "top" | "middle";
   link?: string | null; customData?: Record<string, unknown> | null;
-  icon?: string;  // "database","cloud","lock","server","docker","lambda","api","queue","cache","user","k8s" or emoji
+  icon?: string;  // "lambda","docker","database","db","cloud","lock","globe","server","api","queue","cache","storage","user","users","warning","check","fire","key","mail","search","kubernetes","k8s" or emoji
 }
 
 interface ConnectOpts {
@@ -71,6 +71,6 @@ declare class Diagram {
   removeEdge(from: string, to: string, label?: string): void;
 
   /** Always return this. Pass format as array for multi-output e.g. ["excalidraw", "svg"]. */
-  render(opts?: { format?: "excalidraw" | "url" | "png" | "svg" | ("excalidraw" | "url" | "png" | "svg")[]; path?: string }): Promise<{ json: object; url?: string; filePath?: string; filePaths?: string[]; pngBase64?: string; svgString?: string }>;
+  render(opts?: { format?: "excalidraw" | "url" | "png" | "svg" | ("excalidraw" | "url" | "png" | "svg")[]; path?: string }): Promise<{ json: object; url?: string; filePath?: string; filePaths?: string[]; pngBase64?: string; svgString?: string; warnings?: string[]; changeSummary?: string; stats?: { nodes: number; edges: number; groups: number } }>;
 }
 `;

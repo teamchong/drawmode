@@ -107,22 +107,26 @@ async function launchBrowser(): Promise<{ browser: any; userDataDir: string } | 
     return null;
   }
 
-  const { mkdtemp } = await import("node:fs/promises");
+  const { mkdtemp, rm } = await import("node:fs/promises");
   const { join } = await import("node:path");
   const { tmpdir } = await import("node:os");
   const userDataDir = await mkdtemp(join(tmpdir(), "drawmode-pup-"));
 
-  const browser = await (puppeteerMod.default ?? puppeteerMod).launch({
-    headless: true,
-    args: [
-      "--disable-web-security",
-      "--disable-features=OpaqueResponseBlockingV02",
-      "--user-data-dir=" + userDataDir,
-      "--no-sandbox",
-    ],
-  });
-
-  return { browser, userDataDir };
+  try {
+    const browser = await (puppeteerMod.default ?? puppeteerMod).launch({
+      headless: true,
+      args: [
+        "--disable-web-security",
+        "--disable-features=OpaqueResponseBlockingV02",
+        "--user-data-dir=" + userDataDir,
+        "--no-sandbox",
+      ],
+    });
+    return { browser, userDataDir };
+  } catch {
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+    return null;
+  }
 }
 
 /**

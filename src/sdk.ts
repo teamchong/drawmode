@@ -45,6 +45,16 @@ function computeChangeSummary(oldElements: ExcalidrawElement[], newElements: Exc
     newShapes.set(el.id, el);
   }
 
+  // Pre-index bound text by containerId for O(1) lookup
+  const newTextByContainer = new Map<string, ExcalidrawElement>();
+  for (const e of newElements) {
+    if (e.type === "text" && e.containerId) newTextByContainer.set(e.containerId, e);
+  }
+  const oldTextByContainer = new Map<string, ExcalidrawElement>();
+  for (const e of oldElements) {
+    if (e.type === "text" && e.containerId) oldTextByContainer.set(e.containerId, e);
+  }
+
   const added: string[] = [];
   const removed: string[] = [];
   const moved: string[] = [];
@@ -56,12 +66,12 @@ function computeChangeSummary(oldElements: ExcalidrawElement[], newElements: Exc
   for (const [id, el] of newShapes) {
     const old = oldShapes.get(id);
     if (!old) {
-      const boundText = newElements.find(e => e.type === "text" && e.containerId === id);
+      const boundText = newTextByContainer.get(id);
       const label = el.text ?? boundText?.text ?? id;
       added.push(`"${label}" (${el.type})`);
     } else {
-      const boundTextNew = newElements.find(e => e.type === "text" && e.containerId === id);
-      const boundTextOld = oldElements.find(e => e.type === "text" && e.containerId === id);
+      const boundTextNew = newTextByContainer.get(id);
+      const boundTextOld = oldTextByContainer.get(id);
       const newLabel = el.text ?? boundTextNew?.text ?? "";
       const oldLabel = old.text ?? boundTextOld?.text ?? "";
       const dx = Math.abs((el.x ?? 0) - (old.x ?? 0));
@@ -79,7 +89,7 @@ function computeChangeSummary(oldElements: ExcalidrawElement[], newElements: Exc
   // Find removed
   for (const [id, el] of oldShapes) {
     if (!newShapes.has(id)) {
-      const boundText = oldElements.find(e => e.type === "text" && e.containerId === id);
+      const boundText = oldTextByContainer.get(id);
       const label = el.text ?? boundText?.text ?? id;
       removed.push(`"${label}" (${el.type})`);
     }
@@ -1422,7 +1432,7 @@ export class Diagram {
 
     // WASM validation: log warnings to stderr if available
     if (isWasmLoaded()) {
-      const errorsJson = validateElements(JSON.stringify(elements));
+      const errorsJson = await validateElements(JSON.stringify(elements));
       if (errorsJson) {
         try {
           const errors = JSON.parse(errorsJson);
@@ -1567,8 +1577,9 @@ export class Diagram {
         const gh = (maxY + padding) - gy;
 
         // Check every non-member node
+        const childSet = new Set(group.children);
         for (const [nodeId, node] of positioned) {
-          if (group.children.includes(nodeId)) continue;
+          if (childSet.has(nodeId)) continue;
           const nx = node.x ?? 0, ny = node.y ?? 0;
           if (!rectsOverlap(gx, gy, gw, gh, nx, ny, node.width, node.height, 5)) continue;
 
@@ -2123,12 +2134,13 @@ export class Diagram {
       });
 
       // Set frameId on child elements
+      const frameChildSet = new Set(frame.children);
       for (const el of elements) {
-        if (frame.children.includes(el.id)) {
+        if (frameChildSet.has(el.id)) {
           el.frameId = frameId;
         }
         // Also tag bound text elements
-        if (el.containerId && frame.children.includes(el.containerId)) {
+        if (el.containerId && frameChildSet.has(el.containerId)) {
           el.frameId = frameId;
         }
       }

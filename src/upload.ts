@@ -99,7 +99,7 @@ export async function uploadToExcalidraw(jsonString: string): Promise<string> {
 
   // 3. zlib compress → encrypt
   // Try Zig WASM first, fall back to Node.js zlib or CompressionStream
-  let compressed = zlibCompress(innerConcat);
+  let compressed = await zlibCompress(innerConcat);
   if (!compressed) {
     compressed = await zlibCompressFallback(innerConcat);
   }
