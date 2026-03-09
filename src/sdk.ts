@@ -586,12 +586,12 @@ export class Diagram {
     const raw = await readFile(path, "utf-8");
     const parsed = ExcalidrawFileSchema.safeParse(JSON.parse(raw));
     if (!parsed.success) throw new Error(`Invalid .excalidraw file: ${parsed.error.message}`);
-    return Diagram.fromElements(parsed.data.elements);
+    return (this as typeof Diagram).fromElements(parsed.data.elements);
   }
 
   /** Reconstruct a Diagram from raw Excalidraw elements (no filesystem needed). */
-  static fromElements(elements: ExcalidrawElement[]): Diagram {
-    const d = new Diagram();
+  static fromElements(this: new () => Diagram, elements: ExcalidrawElement[]): Diagram {
+    const d = new this();
 
     // Index text elements by containerId for label lookup
     const textByContainer = new Map<string, ExcalidrawElement>();
@@ -716,6 +716,23 @@ export class Diagram {
           const boundLabel = textByContainer.get(el.id);
           if (boundLabel) d.passthrough.push(boundLabel);
         }
+      } else if (el.type === "line") {
+        // Reconstruct line element
+        d.nodes.set(el.id, {
+          id: el.id,
+          label: "",
+          type: "line",
+          width: el.width,
+          height: el.height,
+          color: { background: "transparent", stroke: el.strokeColor ?? "" },
+          opts: {
+            strokeWidth: el.strokeWidth,
+            strokeStyle: el.strokeStyle as StrokeStyle | undefined,
+          },
+          linePoints: (el.points as [number, number][]) ?? [],
+          absX: el.x,
+          absY: el.y,
+        });
       } else if (el.type === "text" && !el.containerId) {
         // Skip group label text elements (detected in pre-scan above)
         if (el.id.endsWith("-label") && groupIds.has(el.id.replace(/-label$/, ""))) continue;

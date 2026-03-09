@@ -1,9 +1,13 @@
 /**
  * LocalExecutor — runs LLM-generated diagram code in the current process.
  *
- * No sandbox needed: the generated code only calls the Diagram SDK which
- * produces JSON. No filesystem, network, or eval risk beyond what the
- * SDK exposes.
+ * Defense-in-depth: common globals (fetch, eval, Function, etc.) are shadowed
+ * so LLM code can only use the Diagram API in the normal case. This is NOT a
+ * security sandbox — constructor chain escapes and dynamic import() bypass
+ * shadowing. For true isolation, use Cloudflare's Dynamic Worker Loader.
+ *
+ * Acceptable because: locally the LLM already has full system access, and on
+ * Workers the env only contains non-secret bindings (WASM module, browser).
  */
 
 import { Diagram } from "./sdk.js";
@@ -49,11 +53,13 @@ export async function executeCode(
       })();
     `;
 
-    // Shadow dangerous globals so generated code can only use the Diagram API.
-    // new Function() has access to global scope; shadowing with undefined blocks it.
+    // Shadow common globals as defense-in-depth. Not bulletproof — constructor
+    // chain escapes (Diagram.constructor.constructor) and dynamic import() still
+    // work. But blocks the obvious vectors (fetch, eval, process, etc.).
     const fn = new Function(
       "Diagram",
       "fetch", "globalThis", "self", "process", "require",
+      "eval", "Function",
       wrappedCode,
     );
 
@@ -62,7 +68,7 @@ export async function executeCode(
     let timer: ReturnType<typeof setTimeout>;
     try {
       const result = await Promise.race([
-        fn(ConfiguredDiagram, undefined, undefined, undefined, undefined, undefined),
+        fn(ConfiguredDiagram, undefined, undefined, undefined, undefined, undefined, undefined, undefined),
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error(`Execution timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS);
         }),
