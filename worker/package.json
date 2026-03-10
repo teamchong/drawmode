@@ -1,9 +1,7 @@
 {
   "name": "drawmode-worker",
   "private": true,
-  "dependencies": {
-    "@cloudflare/puppeteer": "^0.0.20"
-  },
+  "dependencies": {},
   "scripts": {
     "deploy": "wrangler deploy"
   }

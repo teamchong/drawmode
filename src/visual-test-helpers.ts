@@ -23,7 +23,7 @@ export interface CompareResult {
  * Compare a rendered PNG against a golden baseline snapshot.
  * First run creates the baseline. Subsequent runs compare against it.
  *
- * @param pngBase64 - Base64-encoded PNG from renderPngLocal
+ * @param pngBase64 - Base64-encoded PNG from renderPngWasm
  * @param snapshotName - Name for this snapshot (e.g., "two-box-arrow")
  * @param threshold - Pixel match threshold 0-1 (default 0.05 = 5%)
  */

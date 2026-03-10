@@ -1549,28 +1549,35 @@ export class Diagram {
       }
 
       if (format === "png") {
-        const { renderPngLocal } = await import("./png.js");
         const pngPath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "") + ".png";
-        const pngData = await renderPngLocal(elements, pngPath);
-        if (pngData) {
+        let pngData: string | null = null;
+
+        const { renderPngWasm } = await import("./png.js");
+        const wasmResult = await renderPngWasm(elements);
+        if (wasmResult) {
+          pngData = wasmResult.pngBase64;
+          if (fs) await fs.writeFile(pngPath, wasmResult.pngBytes);
           result.pngBase64 = pngData;
           if (!result.filePath) result.filePath = pngPath;
           filePaths.push(pngPath);
         } else {
-          throw new Error("PNG export requires puppeteer. Install it with: npm install puppeteer");
+          throw new Error("PNG export failed. Ensure WASM and linkedom are available.");
         }
       }
 
       if (format === "svg") {
-        const { renderSvgLocal } = await import("./png.js");
         const svgPath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "") + ".svg";
-        const svgData = await renderSvgLocal(elements, svgPath);
+        let svgData: string | null = null;
+
+        const { renderSvgWasm } = await import("./png.js");
+        svgData = await renderSvgWasm(elements);
         if (svgData) {
+          if (fs) await fs.writeFile(svgPath, svgData, "utf-8");
           result.svgString = svgData;
           if (!result.filePath) result.filePath = svgPath;
           filePaths.push(svgPath);
         } else {
-          throw new Error("SVG export requires puppeteer. Install it with: npm install puppeteer");
+          throw new Error("SVG export failed. Ensure linkedom is available.");
         }
       }
     }

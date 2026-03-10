@@ -1,37 +1,18 @@
 /**
- * PNG + SVG export tests — verifies puppeteer renders valid, non-zero-size images.
+ * PNG + SVG export tests — verifies WASM-based rendering produces valid images.
  */
 
 import { describe, it, expect } from "vitest";
 import { readFile, unlink } from "node:fs/promises";
 import { Diagram } from "./sdk.js";
-import { buildRenderHTML, buildSvgHTML, renderPngLocal, renderSvgLocal } from "./png.js";
+import { renderPngWasm, renderSvgWasm } from "./png.js";
 import { compareSnapshot } from "./visual-test-helpers.js";
+import { loadWasm, svgToPngWasm } from "./layout.js";
 
-describe("buildRenderHTML", () => {
-  it("returns valid HTML with embedded elements", () => {
-    const elements = [{ id: "test", type: "rectangle", x: 0, y: 0, width: 100, height: 50 }];
-    const html = buildRenderHTML(elements);
-    expect(html).toContain("<!DOCTYPE html>");
-    expect(html).toContain("ExcalidrawLib.exportToSvg");
-    expect(html).toContain("__PNG_DATA__");
-    expect(html).toContain('"test"');
-  });
-
-  it("buildSvgHTML returns HTML that captures SVG string", () => {
-    const elements = [{ id: "test", type: "rectangle", x: 0, y: 0, width: 100, height: 50 }];
-    const html = buildSvgHTML(elements);
-    expect(html).toContain("<!DOCTYPE html>");
-    expect(html).toContain("ExcalidrawLib.exportToSvg");
-    expect(html).toContain("__SVG_DATA__");
-    expect(html).not.toContain("canvas"); // SVG flow skips canvas
-  });
-});
-
-describe("PNG export via puppeteer", () => {
+describe("PNG export via WASM", () => {
   const outPath = "/tmp/drawmode-png-test.png";
 
-  it("renderPngLocal produces a valid non-zero PNG", async () => {
+  it("renderPngWasm produces a valid non-zero PNG", async () => {
     const d = new Diagram();
     d.addBox("Test Box", { row: 0, col: 0, color: "backend" });
     d.addBox("Another Box", { row: 1, col: 0, color: "database" });
@@ -43,22 +24,16 @@ describe("PNG export via puppeteer", () => {
     const result = await d.render({ format: "excalidraw" });
     const elements = result.json.elements;
 
-    const base64 = await renderPngLocal(elements, outPath);
-    expect(base64).not.toBeNull();
-    expect(typeof base64).toBe("string");
-    expect(base64!.length).toBeGreaterThan(100);
-
-    // Verify file written to disk
-    const fileBytes = await readFile(outPath);
-    expect(fileBytes.length).toBeGreaterThan(100);
+    const wasmResult = await renderPngWasm(elements);
+    expect(wasmResult).not.toBeNull();
+    expect(wasmResult!.pngBase64.length).toBeGreaterThan(100);
+    expect(wasmResult!.pngBytes.length).toBeGreaterThan(100);
 
     // Verify PNG magic bytes: 0x89 P N G
-    expect(fileBytes[0]).toBe(0x89);
-    expect(fileBytes[1]).toBe(0x50); // P
-    expect(fileBytes[2]).toBe(0x4e); // N
-    expect(fileBytes[3]).toBe(0x47); // G
-
-    await unlink(outPath).catch(() => {});
+    expect(wasmResult!.pngBytes[0]).toBe(0x89);
+    expect(wasmResult!.pngBytes[1]).toBe(0x50); // P
+    expect(wasmResult!.pngBytes[2]).toBe(0x4e); // N
+    expect(wasmResult!.pngBytes[3]).toBe(0x47); // G
   }, 60000);
 
   it("SDK render with format=png writes valid PNG file", async () => {
@@ -89,11 +64,11 @@ describe("PNG export via puppeteer", () => {
     d.addBox("C", { row: 1, col: 0, color: "database" });
     const result = await d.render({ format: "excalidraw" });
 
-    const base64 = await renderPngLocal(result.json.elements, outPath);
-    expect(base64).not.toBeNull();
+    const wasmResult = await renderPngWasm(result.json.elements);
+    expect(wasmResult).not.toBeNull();
 
-    // Decode base64 to check PNG IHDR chunk for width/height
-    const buf = Buffer.from(base64!, "base64");
+    // Decode to check PNG IHDR chunk for width/height
+    const buf = Buffer.from(wasmResult!.pngBase64, "base64");
 
     // PNG structure: 8-byte signature, then IHDR chunk:
     // 4 bytes length, 4 bytes "IHDR", 4 bytes width, 4 bytes height
@@ -104,19 +79,15 @@ describe("PNG export via puppeteer", () => {
     const width = buf.readUInt32BE(ihdrOffset + 8);
     const height = buf.readUInt32BE(ihdrOffset + 12);
 
-    // At 2x scale, a 3-box diagram should be non-degenerate
+    // A 3-box diagram should be non-degenerate
     expect(width).toBeGreaterThanOrEqual(200);
     expect(height).toBeGreaterThanOrEqual(200);
     expect(width).toBeLessThan(10000);
     expect(height).toBeLessThan(10000);
-
-    await unlink(outPath).catch(() => {});
   }, 60000);
 });
 
 describe("Visual regression tests", () => {
-  const outPath = "/tmp/drawmode-visual-test.png";
-
   it("simple two-box diagram with arrow matches baseline", async () => {
     const d = new Diagram();
     const a = d.addBox("API Gateway", { row: 0, col: 0, color: "backend" });
@@ -124,15 +95,13 @@ describe("Visual regression tests", () => {
     d.connect(a, b, "queries");
     const result = await d.render({ format: "excalidraw" });
 
-    const base64 = await renderPngLocal(result.json.elements, outPath);
-    expect(base64).not.toBeNull();
+    const wasmResult = await renderPngWasm(result.json.elements);
+    expect(wasmResult).not.toBeNull();
 
-    const cmp = await compareSnapshot(base64!, "two-box-arrow");
+    const cmp = await compareSnapshot(wasmResult!.pngBase64, "two-box-arrow");
     if (!cmp.baselineCreated) {
       expect(cmp.match).toBe(true);
     }
-
-    await unlink(outPath).catch(() => {});
   }, 60000);
 
   it("bidirectional edges do not overlap labels", async () => {
@@ -143,15 +112,13 @@ describe("Visual regression tests", () => {
     d.connect(b, a, "responses");
     const result = await d.render({ format: "excalidraw" });
 
-    const base64 = await renderPngLocal(result.json.elements, outPath);
-    expect(base64).not.toBeNull();
+    const wasmResult = await renderPngWasm(result.json.elements);
+    expect(wasmResult).not.toBeNull();
 
-    const cmp = await compareSnapshot(base64!, "bidirectional-edges");
+    const cmp = await compareSnapshot(wasmResult!.pngBase64, "bidirectional-edges");
     if (!cmp.baselineCreated) {
       expect(cmp.match).toBe(true);
     }
-
-    await unlink(outPath).catch(() => {});
   }, 60000);
 
   it("diagram with groups matches baseline", async () => {
@@ -164,42 +131,33 @@ describe("Visual regression tests", () => {
     d.addGroup("Data Layer", [db, cache]);
     const result = await d.render({ format: "excalidraw" });
 
-    const base64 = await renderPngLocal(result.json.elements, outPath);
-    expect(base64).not.toBeNull();
+    const wasmResult = await renderPngWasm(result.json.elements);
+    expect(wasmResult).not.toBeNull();
 
-    const cmp = await compareSnapshot(base64!, "diagram-with-groups");
+    const cmp = await compareSnapshot(wasmResult!.pngBase64, "diagram-with-groups");
     if (!cmp.baselineCreated) {
       expect(cmp.match).toBe(true);
     }
-
-    await unlink(outPath).catch(() => {});
   }, 60000);
 });
 
-describe("SVG export via puppeteer", () => {
+describe("SVG export via linkedom", () => {
   const outPath = "/tmp/drawmode-svg-test.svg";
 
-  it("renderSvgLocal produces valid non-zero SVG", async () => {
+  it("renderSvgWasm produces valid non-zero SVG", async () => {
     const d = new Diagram();
     d.addBox("SVG Box", { row: 0, col: 0, color: "backend" });
     d.addBox("Another", { row: 1, col: 0, color: "database" });
     d.connect(d.getNodes()[0], d.getNodes()[1], "links");
     const result = await d.render({ format: "excalidraw" });
 
-    const svgStr = await renderSvgLocal(result.json.elements, outPath);
+    const svgStr = await renderSvgWasm(result.json.elements);
     expect(svgStr).not.toBeNull();
     expect(svgStr!.length).toBeGreaterThan(100);
 
     // Must be valid SVG
     expect(svgStr).toContain("<svg");
     expect(svgStr).toContain("</svg>");
-
-    // Verify file written to disk
-    const fileContent = await readFile(outPath, "utf-8");
-    expect(fileContent).toContain("<svg");
-    expect(fileContent.length).toBeGreaterThan(100);
-
-    await unlink(outPath).catch(() => {});
   }, 60000);
 
   it("SDK render with format=svg writes valid SVG file", async () => {
@@ -225,7 +183,7 @@ describe("SVG export via puppeteer", () => {
     d.addBox("B", { row: 0, col: 1, color: "backend" });
     const result = await d.render({ format: "excalidraw" });
 
-    const svgStr = await renderSvgLocal(result.json.elements, outPath);
+    const svgStr = await renderSvgWasm(result.json.elements);
     expect(svgStr).not.toBeNull();
 
     // Extract viewBox or width/height from SVG
@@ -239,7 +197,46 @@ describe("SVG export via puppeteer", () => {
       expect(w).toBeLessThan(10000);
       expect(h).toBeLessThan(10000);
     }
-
-    await unlink(outPath).catch(() => {});
   }, 60000);
+});
+
+describe("WASM SVG→PNG via PlutoSVG", () => {
+  it("converts a simple SVG to valid PNG bytes", async () => {
+    await loadWasm();
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
+      <rect x="10" y="10" width="180" height="80" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+      <text x="100" y="55" text-anchor="middle" font-size="16" fill="#333">Hello</text>
+    </svg>`;
+
+    const png = await svgToPngWasm(svg, 200, 100);
+    expect(png).not.toBeNull();
+    expect(png!.length).toBeGreaterThan(100);
+
+    // Verify PNG magic bytes
+    expect(png![0]).toBe(0x89);
+    expect(png![1]).toBe(0x50); // P
+    expect(png![2]).toBe(0x4e); // N
+    expect(png![3]).toBe(0x47); // G
+  });
+
+  it("returns null for invalid SVG", async () => {
+    await loadWasm();
+    const png = await svgToPngWasm("not an svg", 100, 100);
+    expect(png).toBeNull();
+  });
+
+  it("uses intrinsic SVG dimensions when width/height are 0", async () => {
+    await loadWasm();
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150">
+      <circle cx="150" cy="75" r="60" fill="#d0bfff" stroke="#7048e8"/>
+    </svg>`;
+
+    const png = await svgToPngWasm(svg);
+    expect(png).not.toBeNull();
+    expect(png!.length).toBeGreaterThan(100);
+
+    // Verify PNG magic bytes
+    expect(png![0]).toBe(0x89);
+    expect(png![1]).toBe(0x50);
+  });
 });

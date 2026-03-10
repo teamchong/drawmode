@@ -57,6 +57,7 @@ interface WasmLayoutExports {
   layoutGraph: (nodesPtr: number, nodesLen: number, edgesPtr: number, edgesLen: number, groupsPtr: number, groupsLen: number, outPtr: number, outCap: number, optsPtr: number, optsLen: number) => number;
   validate: (elemPtr: number, elemLen: number, outPtr: number, outCap: number) => number;
   zlibCompress: (inPtr: number, inLen: number, outPtr: number, outCap: number) => number;
+  svgToPng: (svgPtr: number, svgLen: number, width: number, height: number, outPtr: number, outCap: number) => number;
 }
 
 let wasmInstance: WasmLayoutExports | null = null;
@@ -115,12 +116,14 @@ function makeWasiImports(memRef: { memory: WebAssembly.Memory | null }) {
       },
       fd_close: () => 0,
       fd_fdstat_get: () => 0,
+      fd_fdstat_set_flags: () => 0,
       fd_filestat_get: () => 8,
       fd_prestat_get: () => 8,
       fd_prestat_dir_name: () => 8,
       fd_pwrite: () => 0,
       fd_read: () => 0,
       fd_seek: () => 0,
+      path_open: () => 8,
       fd_write: (_fd: number, iovs: number, iovsLen: number, nwrittenPtr: number) => {
         if (memRef.memory) {
           // Sum iov lengths and report all bytes as written (discard output).
@@ -357,6 +360,23 @@ export async function zlibCompress(data: Uint8Array): Promise<Uint8Array | null>
     const outCap = data.byteLength + 1024; // compressed + zlib overhead
     const outPtr = wasmInstance!.alloc(outCap);
     const written = wasmInstance!.zlibCompress(inPtr, data.byteLength, outPtr, outCap);
+    return written > 0 ? readFromWasm(outPtr, written) : null;
+  });
+}
+
+/** Convert SVG string to PNG bytes via PlutoSVG in WASM. Returns PNG Uint8Array or null. */
+export async function svgToPngWasm(svgString: string, width = 0, height = 0): Promise<Uint8Array | null> {
+  if (!wasmInstance) return null;
+  return withWasmLock(() => {
+    wasmInstance!.resetHeap();
+    const svgBytes = encoder.encode(svgString);
+    const svgPtr = writeToWasm(svgBytes);
+    // PNG output is typically smaller than SVG input, but allocate generously
+    // for large diagrams: width * height * 4 (RGBA) as upper bound, minimum 2MB
+    const outCap = Math.max(2 * 1024 * 1024, width * height * 4);
+    const outPtr = wasmInstance!.alloc(outCap);
+    if (outPtr === 0) return null;
+    const written = wasmInstance!.svgToPng(svgPtr, svgBytes.byteLength, width, height, outPtr, outCap);
     return written > 0 ? readFromWasm(outPtr, written) : null;
   });
 }

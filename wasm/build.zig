@@ -155,6 +155,46 @@ const graphviz_c_sources = [_][]const u8{
     "wasm_platform/neato_compat.c",
 };
 
+const plutovg_c_sources = [_][]const u8{
+    "source/plutovg-blend.c",
+    "source/plutovg-canvas.c",
+    "source/plutovg-font.c",
+    "source/plutovg-ft-math.c",
+    "source/plutovg-ft-raster.c",
+    "source/plutovg-ft-stroker.c",
+    "source/plutovg-matrix.c",
+    "source/plutovg-paint.c",
+    "source/plutovg-path.c",
+    "source/plutovg-rasterize.c",
+    "source/plutovg-surface.c",
+};
+
+const plutosvg_c_sources = [_][]const u8{
+    "source/plutosvg.c",
+};
+
+const pluto_c_flags = [_][]const u8{
+    "-DPLUTOVG_BUILD_STATIC",
+    "-DPLUTOVG_BUILD",
+    "-DPLUTOSVG_BUILD_STATIC",
+    "-DPLUTOSVG_BUILD",
+    "-DPLUTOVG_DISABLE_FONT_FACE_CACHE_LOAD", // no mmap/file font loading in WASM
+    "-DSTBI_WRITE_NO_STDIO", // stream-only PNG output, no file I/O
+    "-DSTBI_NO_STDIO", // stream-only image loading, no file I/O
+    // Bypass WASI's setjmp.h #error — PlutoVG's FreeType rasterizer uses
+    // setjmp for memory overflow recovery. We pre-define pvg_ft macros so
+    // the rasterizer always takes the normal path (setjmp returns 0).
+    "-Dpvg_ft_jmp_buf=int",
+    "-Dpvg_ft_setjmp(x)=0",
+    "-Dpvg_ft_longjmp(x,y)=__builtin_unreachable()",
+    "-std=c11",
+    "-O2",
+    "-Wno-unused-parameter",
+    "-Wno-sign-compare",
+    "-Wno-implicit-function-declaration", // file-based stbi functions stripped by NO_STDIO
+    "-Wno-int-conversion", // stbi_load returns int when undeclared, assigned to pointer
+};
+
 const graphviz_c_flags = [_][]const u8{
     "-DHAVE_CONFIG_H",
     "-DNONDLL",
@@ -240,6 +280,25 @@ pub fn build(b: *std.Build) void {
     for (lib_subdirs) |subdir| {
         wasm.addIncludePath(b.path(subdir));
     }
+
+    // Add PlutoVG C source files (2D vector graphics)
+    const plutovg_root = b.path("vendor/plutovg");
+    wasm.addCSourceFiles(.{
+        .root = plutovg_root,
+        .files = &plutovg_c_sources,
+        .flags = &pluto_c_flags,
+    });
+    wasm.addIncludePath(b.path("vendor/plutovg/include"));
+    wasm.addIncludePath(b.path("vendor/plutovg/source"));
+
+    // Add PlutoSVG C source files (SVG renderer)
+    const plutosvg_root = b.path("vendor/plutosvg");
+    wasm.addCSourceFiles(.{
+        .root = plutosvg_root,
+        .files = &plutosvg_c_sources,
+        .flags = &pluto_c_flags,
+    });
+    wasm.addIncludePath(b.path("vendor/plutosvg/source"));
 
     const install_wasm = b.addInstallArtifact(wasm, .{});
     b.getInstallStep().dependOn(&install_wasm.step);

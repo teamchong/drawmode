@@ -4,10 +4,11 @@ const layout = @import("layout.zig");
 const arrows = @import("arrows.zig");
 const validate_mod = if (build_options.enable_validation) @import("validate.zig") else struct {};
 const compress_mod = if (build_options.enable_compression) @import("compress.zig") else struct {};
+const svg2png_mod = @import("svg2png.zig");
 
 /// Bump allocator backed by a fixed buffer (no imports needed for WASM).
-/// 4MB heap for element data and layout scratch.
-var heap_buf: [4 * 1024 * 1024]u8 = undefined;
+/// 16MB heap for element data, layout scratch, and SVG→PNG rendering.
+var heap_buf: [16 * 1024 * 1024]u8 = undefined;
 var heap_offset: usize = 0;
 
 export fn alloc(size: usize) usize {
@@ -92,6 +93,20 @@ export fn zlibCompress(
     return compress_mod.zlibCompress(in_slice, out_slice) catch 0;
 }
 
+
+/// Convert SVG string to PNG bytes.
+/// Input: SVG data pointer/length + desired width/height (0 = use SVG intrinsic size).
+/// Output: PNG bytes written to out_ptr. Returns byte count, or 0 on failure.
+export fn svgToPng(
+    svg_ptr: [*]const u8,
+    svg_len: usize,
+    width: i32,
+    height: i32,
+    out_ptr: [*]u8,
+    out_cap: usize,
+) usize {
+    return svg2png_mod.svgToPng(svg_ptr, svg_len, width, height, out_ptr, out_cap);
+}
 
 test "alloc and reset" {
     resetHeap();

@@ -24,13 +24,13 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-// Mock @cloudflare/puppeteer — only available in Cloudflare Workers runtime
-vi.mock("@cloudflare/puppeteer", () => ({ default: { launch: () => { throw new Error("not in worker"); } } }));
+// Mock the WASM module import — vitest can't handle .wasm imports
+vi.mock("../worker/wasm-module.js", () => ({ default: null }));
 
 import worker from "../worker/index.js";
 
 const BASE = "https://drawmode.test";
-const env = { MYBROWSER: undefined as unknown as Fetcher };
+const env = {} as Record<string, unknown>;
 
 /** Send a JSON-RPC request to the Worker's /mcp endpoint */
 async function mcpCall(method: string, params: Record<string, unknown> = {}, id: number | string = 1): Promise<Record<string, unknown>> {

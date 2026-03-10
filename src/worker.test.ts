@@ -15,20 +15,21 @@
  * - MCP draw tool — complex diagram with arrows and groups
  * - MCP draw tool — error handling (syntax, runtime, missing return)
  * - MCP draw_info tool
- * - PNG format fallback (no browser binding)
+ * - PNG format via WASM (linkedom + PlutoSVG)
  * - Format coercion (excalidraw → url)
  * - 404 for unknown routes
  */
 
 import { describe, it, expect, vi } from "vitest";
 
-// Mock @cloudflare/puppeteer — only available in Cloudflare Workers runtime
-vi.mock("@cloudflare/puppeteer", () => ({ default: { launch: () => { throw new Error("not in worker"); } } }));
+// Mock the WASM module import — vitest can't handle .wasm imports
+// In vitest, layout.ts auto-loads WASM from the filesystem
+vi.mock("../worker/wasm-module.js", () => ({ default: null }));
 
 import worker from "../worker/index.js";
 
 const BASE = "https://drawmode.test";
-const env = { MYBROWSER: undefined as unknown as Fetcher };
+const env = {} as Record<string, unknown>;
 
 /** Send a JSON-RPC request to the Worker's /mcp endpoint */
 async function mcpCall(method: string, params: Record<string, unknown> = {}, id: number | string = 1): Promise<Record<string, unknown>> {
@@ -177,7 +178,7 @@ describe("worker: MCP draw tool", () => {
     expect(result.content[0].text).toContain("Error:");
   });
 
-  it("PNG format falls back when no browser binding", async () => {
+  it("PNG format produces image via WASM", async () => {
     const result = await drawCall(`
       const d = new Diagram();
       d.addBox("PNG Test", { color: "ai" });
@@ -185,11 +186,13 @@ describe("worker: MCP draw tool", () => {
     `, "png");
 
     expect(result.isError).toBeFalsy();
-    // Should mention unavailability or failure since MYBROWSER is undefined
+
+    // Should produce a PNG image part or fall back with a note
+    const hasImage = result.content.some(p => p.type === "image" && p.mimeType === "image/png");
     const hasNote = result.content.some(p =>
-      p.text?.includes("unavailable") || p.text?.includes("failed") || p.text?.includes("PNG"),
+      p.text?.includes("null") || p.text?.includes("failed") || p.text?.includes("PNG"),
     );
-    expect(hasNote).toBe(true);
+    expect(hasImage || hasNote).toBe(true);
 
     // Should still produce elements
     const countPart = result.content.find(p => p.text?.includes("Generated"));

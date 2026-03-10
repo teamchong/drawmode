@@ -9,55 +9,33 @@
  * - GET /health — Health check
  * - POST /proxy/excalidraw — Proxy for excalidraw.com upload (no CORS on their API)
  *
- * WASM (Graphviz layout + validation) is loaded from the DRAWMODE_WASM binding.
- * PNG export uses Cloudflare Browser Rendering (puppeteer) when available.
+ * WASM (Graphviz layout + validation + PlutoSVG PNG rasterization) is loaded from DRAWMODE_WASM.
+ * PNG export uses linkedom + PlutoSVG WASM — zero config, no browser binding needed.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { buildRenderHTML } from "../src/png.js";
 import { SDK_TYPES } from "../src/sdk-types.js";
 import { executeCode } from "../src/executor.js";
 import { loadWasm, isWasmLoaded } from "../src/layout.js";
-import puppeteer from "@cloudflare/puppeteer";
-
-interface Env {
-  MYBROWSER: Fetcher;
-  DRAWMODE_WASM: WebAssembly.Module;
-}
+import { renderPngWasm } from "../src/png.js";
+import wasmModule from "./wasm-module.js";
 
 /** Worker has no filesystem — coerce excalidraw format to url */
 const WORKER_FORMAT_MAP = { excalidraw: "url" } as const;
 
 /**
- * Render Excalidraw elements to PNG via Cloudflare Browser Rendering.
- * Returns base64-encoded PNG string, or null if browser binding unavailable.
+ * Render Excalidraw elements to PNG via linkedom + PlutoSVG WASM.
+ * No browser binding needed — runs entirely in-process.
  */
-async function renderPng(elements: unknown[], env: Env): Promise<string | null> {
-  if (!env.MYBROWSER) return null;
-
-  const renderHTML = buildRenderHTML(elements);
-
-  let browser;
-  try {
-    browser = await puppeteer.launch(env.MYBROWSER);
-    const page = await browser.newPage();
-    await page.setContent(renderHTML, { waitUntil: "networkidle0" });
-    await page.waitForFunction("window.__DONE", { timeout: 15000 });
-
-    const error = await page.evaluate(() => (window as unknown as Record<string, string>).__ERROR);
-    if (error) throw new Error(error);
-
-    const pngBase64 = await page.evaluate(() => (window as unknown as Record<string, string>).__PNG_DATA__);
-    return pngBase64 as string;
-  } finally {
-    if (browser) await browser.close();
-  }
+async function renderPng(elements: unknown[]): Promise<string | null> {
+  const result = await renderPngWasm(elements);
+  return result?.pngBase64 ?? null;
 }
 
-/** Create an McpServer with draw tools registered. Env is captured for PNG rendering. */
-function createServer(env: Env): McpServer {
+/** Create an McpServer with draw tools registered. */
+function createServer(): McpServer {
   const server = new McpServer({ name: "drawmode", version: "0.1.0" });
 
   server.tool(
@@ -102,12 +80,12 @@ Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omit
 
       if (wantsPng) {
         try {
-          const pngBase64 = await renderPng(elements, env);
+          const pngBase64 = await renderPng(elements);
           if (pngBase64) {
             parts.push({ type: "image", data: pngBase64, mimeType: "image/png" });
           } else {
             if (result.url) parts.push({ type: "text", text: result.url });
-            parts.push({ type: "text", text: "PNG export unavailable (no browser binding). Fell back to URL." });
+            parts.push({ type: "text", text: "PNG export: WASM rasterization returned null. Fell back to URL." });
           }
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -154,7 +132,7 @@ Use this instead of reading .excalidraw JSON directly. Then modify the code and 
     async () => ({
       content: [{
         type: "text" as const,
-        text: `drawmode — Code Mode MCP for Excalidraw diagrams (Worker mode)\n\nColor presets: frontend, backend, database, storage, ai, external, orchestration, queue, cache, users\n\n${SDK_TYPES}\n\nWASM layout: ${isWasmLoaded() ? "active (Graphviz + validation)" : "not loaded"}`,
+        text: `drawmode — Code Mode MCP for Excalidraw diagrams (Worker mode)\n\nColor presets: frontend, backend, database, storage, ai, external, orchestration, queue, cache, users\n\n${SDK_TYPES}\n\nWASM layout: ${isWasmLoaded() ? "active (Graphviz + validation + PlutoSVG PNG)" : "not loaded"}`,
       }],
     }),
   );
@@ -172,10 +150,10 @@ function withCors(response: Response): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    // Load WASM on first request (Graphviz layout + validation)
-    if (!isWasmLoaded() && env.DRAWMODE_WASM) {
-      await loadWasm(env.DRAWMODE_WASM);
+  async fetch(request: Request, _env?: Record<string, unknown>): Promise<Response> {
+    // Load WASM on first request (Graphviz layout + validation + PlutoSVG)
+    if (!isWasmLoaded()) {
+      await loadWasm(wasmModule ?? undefined);
     }
 
     const url = new URL(request.url);
@@ -197,7 +175,7 @@ export default {
 
     // MCP endpoint — stateless via WebStandardStreamableHTTPServerTransport
     if (url.pathname === "/mcp") {
-      const server = createServer(env);
+      const server = createServer();
       const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
       await server.connect(transport);
       const response = await transport.handleRequest(request);
