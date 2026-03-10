@@ -62,6 +62,14 @@ void gviz_set_edge_attr(gviz_graph_t g, gviz_edge_t e, const char *name, const c
     agsafeset((Agedge_t*)e, (char*)name, (char*)value, (char*)"");
 }
 
+void gviz_set_subgraph_attr(gviz_graph_t g, const char *name, const char *value) {
+    /* Set attribute on subgraph only — unlike gviz_set_graph_attr, this does NOT
+     * call agattr() which would set the default value for ALL subgraphs.
+     * Uses agsafeset which creates the attribute if needed via the root graph
+     * but sets the value only on the given subgraph. */
+    agsafeset((Agraph_t*)g, (char*)name, (char*)value, (char*)"");
+}
+
 gviz_graph_t gviz_add_subgraph(gviz_graph_t g, const char *name) {
     return (gviz_graph_t)agsubg((Agraph_t*)g, (char*)name, 1);
 }

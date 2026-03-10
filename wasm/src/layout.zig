@@ -61,8 +61,10 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
         c.gviz_set_default_node_attr(graph, "pos", "");
     }
 
-    // Set default edge attribute so per-edge label agsafeset works
+    // Set default edge attributes so per-edge agsafeset works
     c.gviz_set_default_edge_attr(graph, "label", "");
+    c.gviz_set_default_edge_attr(graph, "constraint", "");
+    c.gviz_set_default_edge_attr(graph, "style", "");
 
     // Create nodes with size attributes
     var node_ptrs: [MAX_NODES]?*anyopaque = undefined;
@@ -90,6 +92,144 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
         c.gviz_set_node_attr(graph, node_ptr, "height", @ptrCast(&height_buf));
 
         c.gviz_set_node_attr(graph, node_ptr, "fixedsize", "true");
+    }
+
+    // Create rank=same subgraphs for nodes with explicit row values.
+    // This ensures nodes at the same row share a Graphviz rank (same vertical position in TB).
+    // Within each row, invisible edges enforce left-to-right column ordering.
+    if (!use_nop2) {
+        // Collect distinct row values
+        var row_vals: [MAX_NODES]i32 = undefined;
+        var row_val_count: usize = 0;
+        for (nodes[0..node_count]) |n| {
+            if (n.row) |r| {
+                var found = false;
+                for (row_vals[0..row_val_count]) |rv| {
+                    if (rv == r) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found and row_val_count < MAX_NODES) {
+                    row_vals[row_val_count] = r;
+                    row_val_count += 1;
+                }
+            }
+        }
+
+        // Sort row values ascending (insertion sort)
+        if (row_val_count > 1) {
+            for (1..row_val_count) |ii| {
+                const key = row_vals[ii];
+                var jj: usize = ii;
+                while (jj > 0 and row_vals[jj - 1] > key) : (jj -= 1) {
+                    row_vals[jj] = row_vals[jj - 1];
+                }
+                row_vals[jj] = key;
+            }
+        }
+
+        // For each distinct row, create a rank=same subgraph and ordering edges
+        for (row_vals[0..row_val_count], 0..) |row_val, ri| {
+            // Subgraph name must NOT start with "cluster" (that would make it a box)
+            var rank_name: [32]u8 = undefined;
+            const rn_prefix = "rank_";
+            @memcpy(rank_name[0..rn_prefix.len], rn_prefix);
+            const ri_len = writeInt(rank_name[rn_prefix.len..], @intCast(ri));
+            rank_name[rn_prefix.len + ri_len] = 0;
+
+            const rank_sg = c.gviz_add_subgraph(graph, @ptrCast(&rank_name)) orelse continue;
+            c.gviz_set_subgraph_attr(rank_sg, "rank", "same");
+
+            // Collect nodes in this row with their col values
+            const RowNode = struct { idx: usize, col_val: i32 };
+            var row_members: [MAX_NODES]RowNode = undefined;
+            var rm_count: usize = 0;
+            for (nodes[0..node_count], 0..) |n, ni| {
+                if (n.row != null and n.row.? == row_val) {
+                    row_members[rm_count] = .{ .idx = ni, .col_val = n.col orelse 0 };
+                    rm_count += 1;
+                }
+            }
+
+            // Sort by col (insertion sort)
+            if (rm_count > 1) {
+                for (1..rm_count) |ii| {
+                    const key = row_members[ii];
+                    var jj: usize = ii;
+                    while (jj > 0 and row_members[jj - 1].col_val > key.col_val) : (jj -= 1) {
+                        row_members[jj] = row_members[jj - 1];
+                    }
+                    row_members[jj] = key;
+                }
+            }
+
+            // Add nodes to rank subgraph
+            for (row_members[0..rm_count]) |rm| {
+                if (node_ptrs[rm.idx]) |np| {
+                    _ = c.gviz_subgraph_add_node(rank_sg, np);
+                }
+            }
+
+            // Add invisible edges between adjacent col-sorted nodes for left-to-right ordering
+            if (rm_count > 1) {
+                for (0..rm_count - 1) |ii| {
+                    const from_p = node_ptrs[row_members[ii].idx];
+                    const to_p = node_ptrs[row_members[ii + 1].idx];
+                    if (from_p != null and to_p != null) {
+                        var invis_name: [32]u8 = undefined;
+                        const ip = "iv_";
+                        @memcpy(invis_name[0..ip.len], ip);
+                        var il: usize = ip.len;
+                        il += writeInt(invis_name[il..], @intCast(ri));
+                        invis_name[il] = '_';
+                        il += 1;
+                        il += writeInt(invis_name[il..], @intCast(ii));
+                        invis_name[il] = 0;
+
+                        const invis_edge = c.gviz_add_edge(graph, from_p.?, to_p.?, @ptrCast(&invis_name));
+                        if (invis_edge) |ie| {
+                            c.gviz_set_edge_attr(graph, ie, "style", "invis");
+                            c.gviz_set_edge_attr(graph, ie, "weight", "100");
+                            // constraint=false: don't use this edge for rank assignment
+                            // (rank=same handles vertical placement; this edge only orders left-to-right)
+                            c.gviz_set_edge_attr(graph, ie, "constraint", "false");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add invisible edges between rows to enforce vertical ordering.
+        // Connect one node from row[i] to one node from row[i+1].
+        if (row_val_count > 1) {
+            for (0..row_val_count - 1) |ri| {
+                // Find first node in row ri and first node in row ri+1
+                var from_idx: ?usize = null;
+                var to_idx: ?usize = null;
+                for (nodes[0..node_count], 0..) |n, ni| {
+                    if (n.row != null and n.row.? == row_vals[ri] and from_idx == null) from_idx = ni;
+                    if (n.row != null and n.row.? == row_vals[ri + 1] and to_idx == null) to_idx = ni;
+                }
+                if (from_idx != null and to_idx != null) {
+                    const from_p = node_ptrs[from_idx.?];
+                    const to_p = node_ptrs[to_idx.?];
+                    if (from_p != null and to_p != null) {
+                        var chain_name: [32]u8 = undefined;
+                        const cp = "rc_";
+                        @memcpy(chain_name[0..cp.len], cp);
+                        const cl = writeInt(chain_name[cp.len..], @intCast(ri));
+                        chain_name[cp.len + cl] = 0;
+
+                        const chain_edge = c.gviz_add_edge(graph, from_p.?, to_p.?, @ptrCast(&chain_name));
+                        if (chain_edge) |ce| {
+                            c.gviz_set_edge_attr(graph, ce, "style", "invis");
+                            c.gviz_set_edge_attr(graph, ce, "weight", "1");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Create cluster subgraphs for groups (Graphviz keeps clusters non-overlapping).
@@ -144,6 +284,20 @@ pub fn layoutGraph(nodes_json: []const u8, edges_json: []const u8, groups_json: 
             if (edge_ptr) |ep| {
                 const label_z = nullTerminate(e.label_slice) orelse continue;
                 c.gviz_set_edge_attr(graph, ep, "label", label_z);
+            }
+        }
+
+        // If both endpoints have the same row value, set constraint=false
+        // so this edge doesn't override rank=same placement.
+        if (edge_ptr) |ep| {
+            var from_row: ?i32 = null;
+            var to_row: ?i32 = null;
+            for (nodes[0..node_count]) |n| {
+                if (std.mem.eql(u8, n.id_slice, e.from_slice)) from_row = n.row;
+                if (std.mem.eql(u8, n.id_slice, e.to_slice)) to_row = n.row;
+            }
+            if (from_row != null and to_row != null and from_row.? == to_row.?) {
+                c.gviz_set_edge_attr(graph, ep, "constraint", "false");
             }
         }
     }
@@ -238,6 +392,7 @@ pub const c = if (is_wasm) struct {
     pub extern fn gviz_add_edge(g: ?*anyopaque, tail: ?*anyopaque, head: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
     pub extern fn gviz_set_default_node_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
     pub extern fn gviz_set_graph_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
+    pub extern fn gviz_set_subgraph_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
     pub extern fn gviz_set_node_attr(g: ?*anyopaque, n: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
     pub extern fn gviz_set_default_edge_attr(g: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
     pub extern fn gviz_set_edge_attr(g: ?*anyopaque, e: ?*anyopaque, name: [*:0]const u8, value: [*:0]const u8) void;
@@ -274,6 +429,7 @@ pub const c = if (is_wasm) struct {
     pub fn gviz_add_edge(_: ?*anyopaque, _: ?*anyopaque, _: ?*anyopaque, _: [*:0]const u8) ?*anyopaque { return null; }
     pub fn gviz_set_default_node_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_set_graph_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
+    pub fn gviz_set_subgraph_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_set_node_attr(_: ?*anyopaque, _: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_set_default_edge_attr(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}
     pub fn gviz_set_edge_attr(_: ?*anyopaque, _: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8) void {}

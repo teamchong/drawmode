@@ -2432,7 +2432,13 @@ export class Diagram {
       return { id, label: g.label, children: nodeChildren, parent: childToParent.get(id) };
     });
 
-    const result = await layoutGraphWasm(wasmNodes, wasmEdges, wasmGroups.length > 0 ? wasmGroups : undefined, { rankdir: this.direction, engine: allAbsolute ? "nop2" : "dot" });
+    // When row/col constraints are present, skip Graphviz clusters (groups).
+    // Graphviz cluster processing overrides rank=same constraints, breaking row alignment.
+    // The SDK computes group bounding boxes from positioned nodes instead (fallback path).
+    const hasRowConstraints = wasmNodes.some(n => n.row !== undefined);
+    const effectiveGroups = hasRowConstraints ? undefined : (wasmGroups.length > 0 ? wasmGroups : undefined);
+
+    const result = await layoutGraphWasm(wasmNodes, wasmEdges, effectiveGroups, { rankdir: this.direction, engine: allAbsolute ? "nop2" : "dot" });
     if (!result) return null;
 
     const positioned = this.applyPositions(result.nodes);

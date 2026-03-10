@@ -50,6 +50,7 @@ void gviz_set_default_edge_attr(gviz_graph_t g, const char *name, const char *va
 void gviz_set_edge_attr(gviz_graph_t g, gviz_edge_t e, const char *name, const char *value);
 
 /* Subgraph (cluster) construction */
+void gviz_set_subgraph_attr(gviz_graph_t g, const char *name, const char *value);
 gviz_graph_t gviz_add_subgraph(gviz_graph_t g, const char *name);
 gviz_node_t gviz_subgraph_add_node(gviz_graph_t subg, gviz_node_t n);
 
