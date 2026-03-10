@@ -16,7 +16,7 @@ Several MCP-based tools can generate diagrams from AI coding assistants. This pa
 | Edit existing | `fromFile()` + `updateNode()` | Yes | Reimport | Yes |
 | Outputs | file, URL, PNG, SVG | Interactive UI | PNG, SVG | XML |
 | Cloud deploy | Cloudflare Workers | Cloud-hosted | Local only | Local only |
-| Validation | Zig WASM | Canvas feedback | Syntax | None |
+| Validation | SDK runtime + Zig WASM | Canvas feedback | Syntax | None |
 | Sequence diagrams | Yes (`addActor`/`message`) | Manual | Yes | Yes |
 | Multi-format output | Yes (`["excalidraw", "svg"]`) | No | No | No |
 | Code Mode | Yes (typed SDK) | No (raw JSON) | No (DSL) | No (XML) |
@@ -66,7 +66,12 @@ drawmode uses a **Code Mode** approach: instead of having the LLM describe a dia
 
 **Raw Excalidraw JSON is error-prone.** Labels require two separate elements (a shape with `boundElements` and a text element with `containerId`). Arrow bindings need precise edge coordinates, staggered connection points, and specific property combinations (`elbowed: true`, `roundness: null`, `roughness: 0`). LLMs frequently produce broken diagrams when writing this JSON directly.
 
-**A typed SDK catches errors at the API level.** Calling `addBox("API Gateway")` always produces a valid shape-plus-label pair. `connect(a, b)` handles arrow geometry automatically. The LLM cannot produce structurally invalid output because the SDK enforces correctness.
+**A typed SDK catches errors at the API level.** Calling `addBox("API Gateway")` always produces a valid shape-plus-label pair. `connect(a, b)` validates that both nodes exist, handles arrow geometry automatically, and throws a clear error if something is wrong. Every SDK method validates its inputs — invalid IDs, wrong element types (e.g., connecting from a group instead of a node), and missing dependencies all produce actionable error messages that let the LLM self-correct:
+
+```
+d.connect(groupId, db, "writes");
+// → Error: Cannot connect from group "grp_1_...". Connect from a node inside the group instead.
+```
 
 **Code is readable, diffable, and version-controllable.** A 10-line TypeScript snippet is easier to review and modify than 200 lines of Excalidraw JSON. You can commit diagram source code alongside your application code.
 

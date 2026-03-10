@@ -45,12 +45,33 @@ Deploy the `worker/` directory to Cloudflare Workers for remote MCP access. Requ
 
 1. The LLM receives the `draw` tool with TypeScript type definitions (~100 lines). Two companion tools — `draw_describe` (convert `.excalidraw` to TypeScript) and `draw_info` (capabilities reference) — support the workflow
 2. The LLM writes code against the `Diagram` SDK
-3. The executor runs the code via `new Function()` -- the SDK handles labels, colors, and IDs
+3. The executor runs the code via `new Function()` — **the SDK validates every call** (invalid IDs, wrong element types, missing nodes all throw clear errors the LLM can self-correct on)
 4. Graphviz (C library statically linked in a Zig WASM module) handles layout positioning and edge routing
 5. WASM validation checks the output for structural correctness
 6. Output is returned as `.excalidraw` files, excalidraw.com URLs, PNGs, SVGs, or any combination
 
 A `.drawmode.ts` sidecar file is always written alongside file output, preserving the source code for future iteration.
+
+### Why Code Mode beats raw JSON
+
+With raw JSON, an LLM produces a blob and you discover it's broken only when Excalidraw tries to render it. With Code Mode, the SDK validates every call and returns actionable errors:
+
+```
+// Raw JSON: silently broken — arrow floats in space, no error
+{ "type": "arrow", "startBinding": { "elementId": "nonexistent" } }
+
+// Code Mode: immediate, actionable error
+d.connect("nonexistent", db, "writes");
+// → Error: Source node not found: "nonexistent". Add the node before connecting it.
+```
+
+The SDK enforces structural rules at the API level:
+- `connect()` — verifies both nodes exist; rejects groups/frames with guidance to connect to a node inside them
+- `addGroup()` / `addFrame()` — verifies all children exist; prevents nesting frames inside frames
+- `message()` — verifies actors exist before sending messages
+- `updateNode()` / `updateEdge()` — verifies the target exists before modifying
+
+Every error message tells the LLM what went wrong and how to fix it, enabling self-correction without human intervention.
 
 ## SDK API Reference
 

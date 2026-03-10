@@ -10,9 +10,10 @@ drawmode exposes three MCP tools: `draw` (generate/edit diagrams), `draw_describ
 1. LLM receives the `draw` tool with SDK type definitions (~100 lines)
 2. LLM writes code using the `Diagram` class
 3. `executor.ts` runs code via `new Function("Diagram", code)` with a `ConfiguredDiagram` subclass
-4. Zig WASM (Graphviz C statically linked) handles layout positioning and arrow routing via the `dot` engine
-5. WASM validation checks the output (bound text, duplicate IDs, overlapping shapes)
-6. Output: `.excalidraw` file, excalidraw.com URL, `.png` file, or `.svg` file
+4. **SDK runtime validation** catches errors at call time — invalid IDs, wrong element types, missing dependencies throw actionable errors the LLM can self-correct on
+5. Zig WASM (Graphviz C statically linked) handles layout positioning and arrow routing via the `dot` engine
+6. **WASM structural validation** checks the rendered output (bound text, duplicate IDs, overlapping shapes)
+7. Output: `.excalidraw` file, excalidraw.com URL, `.png` file, or `.svg` file
 
 ## Project Structure
 
@@ -72,7 +73,21 @@ A single Zig WASM binary with Graphviz C statically linked. Handles layout, edge
 
 Input/output is JSON bytes — the TypeScript layer serializes to JSON, passes to WASM, and reads back results.
 
-### Validation Checks
+### Two-Layer Validation
+
+**Layer 1: SDK runtime validation (at call time)**
+
+Every SDK method validates its inputs before modifying state. This catches errors immediately with actionable messages:
+
+- `connect(from, to)` — both IDs must be nodes (not groups or frames)
+- `addGroup(label, children)` / `addFrame(name, children)` — all children must exist; frames cannot be nested
+- `message(from, to)` — both IDs must be actors
+- `updateNode(id)` / `updateEdge(from, to)` — target must exist
+- `removeGroup(id)` / `removeFrame(id)` — target must exist
+
+**Layer 2: WASM structural validation (after render)**
+
+Post-render checks on the generated Excalidraw JSON:
 
 - Bound text elements have matching containers
 - No duplicate element IDs
