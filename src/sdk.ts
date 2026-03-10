@@ -547,6 +547,12 @@ export class Diagram {
   /** Group elements together with a dashed boundary and label.
    *  Children can be node IDs or other group IDs (for nesting). */
   addGroup(label: string, children: string[], opts?: GroupOpts): string {
+    for (const cid of children) {
+      if (!this.nodes.has(cid) && !this.groups.has(cid)) {
+        if (this.frames.has(cid)) throw new Error(`Cannot add frame "${cid}" to a group. Groups can contain nodes or other groups.`);
+        throw new Error(`Child not found: "${cid}". Add nodes before grouping them.`);
+      }
+    }
     const id = this.nextId("grp");
     this.groups.set(id, { label, children, opts });
     return id;
@@ -554,6 +560,12 @@ export class Diagram {
 
   /** Add a native Excalidraw frame container. Returns the frame ID. */
   addFrame(name: string, children: string[]): string {
+    for (const cid of children) {
+      if (!this.nodes.has(cid) && !this.groups.has(cid)) {
+        if (this.frames.has(cid)) throw new Error(`Cannot nest frame "${cid}" inside another frame.`);
+        throw new Error(`Child not found: "${cid}". Add nodes before framing them.`);
+      }
+    }
     const id = this.nextId("frm");
     this.frames.set(id, { name, children });
     return id;
@@ -561,16 +573,28 @@ export class Diagram {
 
   /** Remove a group container. Children are kept. */
   removeGroup(id: string): void {
+    if (!this.groups.has(id)) throw new Error(`Group not found: "${id}"`);
     this.groups.delete(id);
   }
 
   /** Remove a frame container. Children are kept. */
   removeFrame(id: string): void {
+    if (!this.frames.has(id)) throw new Error(`Frame not found: "${id}"`);
     this.frames.delete(id);
   }
 
   /** Connect two elements with an arrow. */
   connect(from: string, to: string, label?: string, opts?: ConnectOpts): void {
+    if (!this.nodes.has(from)) {
+      if (this.groups.has(from)) throw new Error(`Cannot connect from group "${from}". Connect from a node inside the group instead.`);
+      if (this.frames.has(from)) throw new Error(`Cannot connect from frame "${from}". Connect from a node inside the frame instead.`);
+      throw new Error(`Source node not found: "${from}". Add the node before connecting it.`);
+    }
+    if (!this.nodes.has(to)) {
+      if (this.groups.has(to)) throw new Error(`Cannot connect to group "${to}". Connect to a node inside the group instead.`);
+      if (this.frames.has(to)) throw new Error(`Cannot connect to frame "${to}". Connect to a node inside the frame instead.`);
+      throw new Error(`Target node not found: "${to}". Add the node before connecting it.`);
+    }
     this.edges.push({
       from, to, label,
       style: opts?.style ?? "solid",
@@ -1429,6 +1453,9 @@ export class Diagram {
 
   /** Add a message between actors in a sequence diagram. */
   message(from: string, to: string, label?: string, opts?: ConnectOpts): void {
+    const actorIds = new Set(this.sequenceActors.map(a => a.id));
+    if (!actorIds.has(from)) throw new Error(`Actor not found: "${from}". Add actors with addActor() before sending messages.`);
+    if (!actorIds.has(to)) throw new Error(`Actor not found: "${to}". Add actors with addActor() before sending messages.`);
     this.sequenceMessages.push({ from, to, label, index: this.sequenceMessages.length, opts });
   }
 
