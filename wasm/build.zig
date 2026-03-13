@@ -217,6 +217,7 @@ const graphviz_c_flags = [_][]const u8{
 pub fn build(b: *std.Build) void {
     const enable_validation = b.option(bool, "enable_validation", "Include element validation export (default: true)") orelse true;
     const enable_compression = b.option(bool, "enable_compression", "Include zlib compression export (default: true)") orelse true;
+    const enable_svg2png = b.option(bool, "enable_svg2png", "Include SVG-to-PNG export via PlutoSVG (default: true)") orelse true;
 
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -226,6 +227,7 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_validation", enable_validation);
     build_options.addOption(bool, "enable_compression", enable_compression);
+    build_options.addOption(bool, "enable_svg2png", enable_svg2png);
 
     const wasm = b.addExecutable(.{
         .name = "drawmode",

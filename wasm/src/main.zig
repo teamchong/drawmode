@@ -4,7 +4,7 @@ const layout = @import("layout.zig");
 const arrows = @import("arrows.zig");
 const validate_mod = if (build_options.enable_validation) @import("validate.zig") else struct {};
 const compress_mod = if (build_options.enable_compression) @import("compress.zig") else struct {};
-const svg2png_mod = @import("svg2png.zig");
+const svg2png_mod = if (build_options.enable_svg2png) @import("svg2png.zig") else struct {};
 
 /// Bump allocator backed by a fixed buffer (no imports needed for WASM).
 /// 64MB heap for element data, layout scratch, and SVG→PNG rendering.
@@ -98,6 +98,7 @@ export fn zlibCompress(
 /// Convert SVG string to PNG bytes.
 /// Input: SVG data pointer/length + desired width/height (0 = use SVG intrinsic size).
 /// Output: PNG bytes written to out_ptr. Returns byte count, or 0 on failure.
+/// Conditionally included via -Denable_svg2png (default: true).
 export fn svgToPng(
     svg_ptr: [*]const u8,
     svg_len: usize,
@@ -106,6 +107,7 @@ export fn svgToPng(
     out_ptr: [*]u8,
     out_cap: usize,
 ) usize {
+    if (!build_options.enable_svg2png) return 0;
     return svg2png_mod.svgToPng(svg_ptr, svg_len, width, height, out_ptr, out_cap);
 }
 

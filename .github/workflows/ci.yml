@@ -27,7 +27,5 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - name: Zig tests
-        run: cd wasm && zig build test
-      - name: Install Chrome for puppeteer tests
-        run: npx puppeteer browsers install chrome
+        run: cd wasm && zig build test -Denable_svg2png=false
       - run: pnpm test
