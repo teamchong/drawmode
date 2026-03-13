@@ -10,7 +10,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "{ cd wasm && zig build && ./optimize-wasm.sh && cd ..; } || echo 'Zig not available, skipping WASM build'; tsc && cp src/widget.html dist/widget.html",
+    "build": "cd wasm && zig build && ./optimize-wasm.sh && cd .. && tsc && cp src/widget.html dist/widget.html",
     "build:wasm": "cd wasm && zig build && ./optimize-wasm.sh",
     "dev": "tsx src/index.ts",
     "test": "vitest run",

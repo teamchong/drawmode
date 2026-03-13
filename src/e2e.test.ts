@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { executeCode } from "./executor.js";
-import { loadWasm, isWasmLoaded } from "./layout.js";
+import { loadWasm } from "./layout.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -113,7 +113,7 @@ declare class Diagram {
     async () => ({
       content: [{
         type: "text" as const,
-        text: `drawmode — WASM: ${isWasmLoaded() ? "loaded" : "not loaded"}`,
+        text: `drawmode — WASM: loaded`,
       }],
     }),
   );

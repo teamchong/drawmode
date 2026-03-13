@@ -219,7 +219,7 @@ function callWasmSync(
   inputJson: string,
   outCap: number,
 ): string | null {
-  if (!wasmInstance) return null;
+  if (!wasmInstance) throw new Error("WASM not loaded");
   wasmInstance.resetHeap();
   const inBytes = encoder.encode(inputJson);
   const inPtr = writeToWasm(inBytes);
@@ -238,7 +238,7 @@ export async function layoutGraphWasm(
   groups?: { id: string; label: string; children: string[]; parent?: string }[],
   options?: { rankdir?: string; engine?: string },
 ): Promise<WasmLayoutResult | null> {
-  if (!wasmInstance) return null;
+  if (!wasmInstance) throw new Error("WASM not loaded — run loadWasm() first");
   return withWasmLock(() => layoutGraphWasmInner(nodes, edges, groups, options));
 }
 
@@ -248,7 +248,7 @@ function layoutGraphWasmInner(
   groups?: { id: string; label: string; children: string[]; parent?: string }[],
   options?: { rankdir?: string; engine?: string },
 ): WasmLayoutResult | null {
-  if (!wasmInstance) return null;
+  if (!wasmInstance) throw new Error("WASM not loaded");
 
   const nodesJson = JSON.stringify(
     nodes.map(n => ({
@@ -345,7 +345,7 @@ function layoutGraphWasmInner(
 
 /** Validate Excalidraw elements. Returns validation errors JSON, or null. */
 export async function validateElements(elementsJson: string): Promise<string | null> {
-  if (!wasmInstance) return null;
+  if (!wasmInstance) throw new Error("WASM not loaded — run loadWasm() first");
   return withWasmLock(() =>
     callWasmSync(wasmInstance!.validate.bind(wasmInstance), elementsJson, 16 * 1024),
   );
@@ -353,7 +353,7 @@ export async function validateElements(elementsJson: string): Promise<string | n
 
 /** Compress data using zlib format (matching pako.deflate). Returns compressed bytes or null. */
 export async function zlibCompress(data: Uint8Array): Promise<Uint8Array | null> {
-  if (!wasmInstance) return null;
+  if (!wasmInstance) throw new Error("WASM not loaded — run loadWasm() first");
   return withWasmLock(() => {
     wasmInstance!.resetHeap();
     const inPtr = writeToWasm(data);
@@ -366,7 +366,7 @@ export async function zlibCompress(data: Uint8Array): Promise<Uint8Array | null>
 
 /** Convert SVG string to PNG bytes via PlutoSVG in WASM. Returns PNG Uint8Array or null. */
 export async function svgToPngWasm(svgString: string, width = 0, height = 0): Promise<Uint8Array | null> {
-  if (!wasmInstance) return null;
+  if (!wasmInstance) throw new Error("WASM not loaded — run loadWasm() first");
   return withWasmLock(() => {
     wasmInstance!.resetHeap();
     const svgBytes = encoder.encode(svgString);

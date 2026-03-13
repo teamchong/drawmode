@@ -18,6 +18,7 @@ const c = struct {
     // PlutoVG — canvas
     pub extern fn plutovg_canvas_create(surface: ?*anyopaque) ?*anyopaque;
     pub extern fn plutovg_canvas_destroy(canvas: ?*anyopaque) void;
+    pub extern fn plutovg_canvas_scale(canvas: ?*anyopaque, sx: f32, sy: f32) void;
     pub extern fn plutovg_canvas_add_font_face(canvas: ?*anyopaque, family: [*:0]const u8, bold: bool, italic: bool, face: ?*anyopaque) void;
 
     // PlutoVG — font face
@@ -59,34 +60,42 @@ pub fn svgToPng(
     out_ptr: [*]u8,
     out_cap: usize,
 ) usize {
-    // Parse the SVG document from memory
+    // Parse SVG document — always load at intrinsic size, then scale if needed.
     const doc = c.plutosvg_document_load_from_data(
         svg_ptr,
         @intCast(svg_len),
-        -1, // let SVG define its own width
-        -1, // let SVG define its own height
+        -1,
+        -1,
         null,
         null,
     ) orelse return 0;
     defer c.plutosvg_document_destroy(doc);
 
-    // Determine render dimensions
-    const render_w: c_int = if (width > 0) width else @intFromFloat(c.plutosvg_document_get_width(doc));
-    const render_h: c_int = if (height > 0) height else @intFromFloat(c.plutosvg_document_get_height(doc));
+    // Document's intrinsic dimensions (from SVG width/height or viewBox)
+    const doc_w = c.plutosvg_document_get_width(doc);
+    const doc_h = c.plutosvg_document_get_height(doc);
+    if (doc_w <= 0 or doc_h <= 0) return 0;
 
+    // Target render dimensions: use caller's if provided, else intrinsic
+    const render_w: c_int = if (width > 0) width else @intFromFloat(doc_w);
+    const render_h: c_int = if (height > 0) height else @intFromFloat(doc_h);
     if (render_w <= 0 or render_h <= 0) return 0;
 
-    // Create surface and canvas manually (instead of render_to_surface)
-    // so we can attach fonts to the canvas before rendering.
+    // Create surface at target dimensions
     const surface = c.plutovg_surface_create(render_w, render_h) orelse return 0;
     defer c.plutovg_surface_destroy(surface);
 
     const canvas = c.plutovg_canvas_create(surface) orelse return 0;
     defer c.plutovg_canvas_destroy(canvas);
 
+    // Scale canvas if target differs from intrinsic (e.g., 2x retina)
+    const fw: f32 = @floatFromInt(render_w);
+    const fh: f32 = @floatFromInt(render_h);
+    if (fw != doc_w or fh != doc_h) {
+        c.plutovg_canvas_scale(canvas, fw / doc_w, fh / doc_h);
+    }
+
     // Load embedded fonts into the canvas font cache.
-    // PlutoVG uses stb_truetype so these must be TTF (not woff2).
-    // The font data is embedded at compile time via @embedFile — zero runtime I/O.
     const virgil_face = c.plutovg_font_face_load_from_data(
         virgil_ttf.ptr,
         virgil_ttf.len,
@@ -96,7 +105,6 @@ pub fn svgToPng(
     );
     if (virgil_face) |face| {
         c.plutovg_canvas_add_font_face(canvas, "Virgil", false, false, face);
-        // Don't destroy — canvas owns it now
     }
 
     const assistant_face = c.plutovg_font_face_load_from_data(
@@ -113,10 +121,10 @@ pub fn svgToPng(
     // Render SVG document onto the canvas (shapes + text)
     const ok = c.plutosvg_document_render(
         doc,
-        null, // render entire document
+        null,
         canvas,
-        null, // no currentColor override
-        null, // no palette callback
+        null,
+        null,
         null,
     );
     if (!ok) return 0;

@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Diagram } from "./sdk.js";
-import { isWasmLoaded } from "./layout.js";
 import { unlink, writeFile, readFile } from "node:fs/promises";
 
 describe("Diagram SDK", () => {
@@ -800,15 +799,13 @@ describe("Diagram SDK", () => {
 
   // ── Layout warnings ──
 
-  it("render with WASM loaded produces no layout fallback warning", async () => {
-    if (!isWasmLoaded()) return; // skip if WASM not available
+  it("render produces no layout warnings", async () => {
     const d = new Diagram();
     d.addBox("A", { row: 0, col: 0 });
     d.addBox("B", { row: 1, col: 0 });
 
     const result = await d.render({ format: "excalidraw" });
-    const fallbackWarnings = (result.warnings ?? []).filter(w => w.includes("grid fallback"));
-    expect(fallbackWarnings.length).toBe(0);
+    expect(result.warnings ?? []).toEqual([]);
   });
 
   it("addFrame creates frame element with children", async () => {
@@ -881,7 +878,6 @@ describe("Diagram SDK", () => {
   // ── Multi-edge differentiation ──
 
   it("multi-edges between same pair produce different arrows", async () => {
-    if (!isWasmLoaded()) return; // requires WASM for Graphviz routing
     const d = new Diagram();
     const a = d.addBox("A", { row: 0, col: 0 });
     const b = d.addBox("B", { row: 1, col: 0 });
@@ -1486,10 +1482,7 @@ A[Start]-->B[End]`);
       const elB = result.json.elements.find(e => e.id === b);
       expect(elA).toBeDefined();
       expect(elB).toBeDefined();
-      // RL reversal depends on Graphviz WASM; TS fallback places L→R
-      if (isWasmLoaded()) {
-        expect(elB!.x).toBeLessThan(elA!.x);
-      }
+      expect(elB!.x).toBeLessThan(elA!.x);
     });
 
     it("BT direction renders without error", async () => {
@@ -1503,10 +1496,7 @@ A[Start]-->B[End]`);
       const elB = result.json.elements.find(e => e.id === b);
       expect(elA).toBeDefined();
       expect(elB).toBeDefined();
-      // BT reversal depends on Graphviz WASM; TS fallback places T→B
-      if (isWasmLoaded()) {
-        expect(elB!.y).toBeLessThan(elA!.y);
-      }
+      expect(elB!.y).toBeLessThan(elA!.y);
     });
 
     it("empty label produces element", async () => {
@@ -1569,17 +1559,13 @@ A[Start]-->B[End]`);
       }
     });
 
-    it("grid fallback nudges overlapping nodes apart", async () => {
+    it("same-cell nodes get distinct positions from Graphviz", async () => {
       const d = new Diagram();
       d.addBox("A", { row: 0, col: 0 });
       d.addBox("B", { row: 0, col: 0 });
       const result = await d.render({ format: "excalidraw" });
       const rects = result.json.elements.filter((e: any) => e.type === "rectangle");
       expect(rects.length).toBe(2);
-      if (!isWasmLoaded()) {
-        const samePos = rects[0].x === rects[1].x && rects[0].y === rects[1].y;
-        expect(samePos).toBe(false);
-      }
     });
 
     it("non-member nodes nudged outside group bounding box", async () => {

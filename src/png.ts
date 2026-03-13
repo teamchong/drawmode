@@ -16,7 +16,19 @@ export async function renderPngWasm(elements: unknown[]): Promise<{ pngBase64: s
   if (!isWasmLoaded()) await loadWasm();
 
   const svgString = await renderSvgString(elements);
-  const pngBytes = await svgToPngWasm(svgString);
+
+  // Extract width/height from SVG root element so PlutoSVG renders at full resolution.
+  // Excalidraw's exportToSvg sets width/height to 2x the viewBox for retina.
+  let width = 0, height = 0;
+  const svgTag = svgString.match(/<svg[^>]+>/);
+  if (svgTag) {
+    const wm = svgTag[0].match(/\bwidth="([\d.]+)"/);
+    const hm = svgTag[0].match(/\bheight="([\d.]+)"/);
+    if (wm) width = Math.round(parseFloat(wm[1]));
+    if (hm) height = Math.round(parseFloat(hm[1]));
+  }
+
+  const pngBytes = await svgToPngWasm(svgString, width, height);
   if (!pngBytes) return null;
 
   // Convert to base64

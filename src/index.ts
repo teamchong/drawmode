@@ -257,7 +257,7 @@ A .drawmode.ts sidecar is also saved alongside file output — you can read and 
 ## SDK Reference
 ${SDK_TYPES}
 
-WASM layout: ${isWasmLoaded() ? "loaded" : "not loaded (using TS grid layout)"}`,
+WASM: ${isWasmLoaded() ? "loaded" : "not loaded"}`,
         }],
       };
     },

@@ -7,8 +7,9 @@ const compress_mod = if (build_options.enable_compression) @import("compress.zig
 const svg2png_mod = @import("svg2png.zig");
 
 /// Bump allocator backed by a fixed buffer (no imports needed for WASM).
-/// 16MB heap for element data, layout scratch, and SVG→PNG rendering.
-var heap_buf: [16 * 1024 * 1024]u8 = undefined;
+/// 64MB heap for element data, layout scratch, and SVG→PNG rendering.
+/// Large diagrams (18+ nodes at 2x retina) need ~20MB for PNG output alone.
+var heap_buf: [64 * 1024 * 1024]u8 = undefined;
 var heap_offset: usize = 0;
 
 export fn alloc(size: usize) usize {

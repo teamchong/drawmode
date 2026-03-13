@@ -384,32 +384,6 @@ function resolveTextBoxOverlaps(positioned: Map<string, PositionedNode>, gap = 8
   }
 }
 
-/**
- * Resolve overlapping nodes in the grid fallback layout.
- * Nudges nodes that share the same cell to adjacent positions.
- */
-function resolveNodeOverlaps(positioned: Map<string, { x?: number; y?: number; width: number; height: number }>, budget = 5): void {
-  const nodes = Array.from(positioned.values());
-  if (nodes.length < 2) return;
-
-  for (let iter = 0; iter < budget; iter++) {
-    let moved = false;
-    for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
-      const ax = a.x ?? 0, ay = a.y ?? 0;
-      for (let j = i + 1; j < nodes.length; j++) {
-        const b = nodes[j];
-        const bx = b.x ?? 0, by = b.y ?? 0;
-        if (!rectsOverlap(ax, ay, a.width, a.height, bx, by, b.width, b.height, 10)) continue;
-        // Nudge b to the right by one column spacing
-        b.x = (b.x ?? 0) + COL_SPACING;
-        moved = true;
-      }
-    }
-    if (!moved) break;
-  }
-}
-
 export class Diagram {
   private nodes = new Map<string, GraphNode>();
   private edges: GraphEdge[] = [];
@@ -1612,9 +1586,9 @@ export class Diagram {
     // Nudge text nodes that overlap with box nodes
     resolveTextBoxOverlaps(positioned);
 
-    // Nudge non-member nodes out of group bounding boxes (grid fallback only).
-    // Graphviz clusters handle containment properly; grid layout can place
-    // bystander nodes inside a group's child bbox by coincidence.
+    // Nudge non-member nodes out of group bounding boxes when Graphviz clusters
+    // are skipped (e.g. due to row constraints). Graphviz clusters handle
+    // containment properly, but without clusters nodes may overlap group boxes.
     if (!groupBounds && this.groups.size > 0) {
       for (const [_groupId, group] of this.groups) {
         const childNodes = group.children
@@ -2387,17 +2361,16 @@ export class Diagram {
     return elements;
   }
 
-  /** Assign x,y positions to all nodes. Priority: WASM Graphviz → TS grid. */
-  private async layoutNodes(warnings?: string[]): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] }> {
-    // Try WASM Graphviz layout (async)
+  /** Assign x,y positions to all nodes via WASM Graphviz layout. */
+  private async layoutNodes(_warnings?: string[]): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes?: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] }> {
     const wasmResult = await this.layoutNodesWasm();
     if (wasmResult) return wasmResult;
-
-    // Fallback: TS grid layout + overlap nudging
-    warnings?.push("Graphviz layout unavailable; using grid fallback");
-    const positioned = this.layoutNodesGrid();
-    resolveNodeOverlaps(positioned);
-    return { positioned };
+    // No shape nodes to lay out (text-only / line-only diagrams) — return empty positions
+    const hasShapes = Array.from(this.nodes.values()).some(
+      n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond",
+    );
+    if (!hasShapes) return { positioned: this.applyPositions([]) };
+    throw new Error("Graphviz WASM layout failed. Ensure WASM module is built and loaded.");
   }
 
   private async layoutNodesWasm(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] } | null> {
@@ -2441,7 +2414,7 @@ export class Diagram {
 
     // When row/col constraints are present, skip Graphviz clusters (groups).
     // Graphviz cluster processing overrides rank=same constraints, breaking row alignment.
-    // The SDK computes group bounding boxes from positioned nodes instead (fallback path).
+    // The SDK computes group bounding boxes from positioned nodes instead.
     const hasRowConstraints = wasmNodes.some(n => n.row !== undefined);
     const effectiveGroups = hasRowConstraints ? undefined : (wasmGroups.length > 0 ? wasmGroups : undefined);
 
@@ -2508,44 +2481,6 @@ export class Diagram {
         if (node.absX === undefined) offsetX += node.width + 40;
       }
     }
-    return result;
-  }
-
-  private layoutNodesGrid(): Map<string, PositionedNode> {
-    const result = new Map<string, PositionedNode>();
-
-    let autoRow = 0;
-    let autoCol = 0;
-    const maxColsPerRow = 5;
-
-    for (const node of this.nodes.values()) {
-      // Absolute position takes precedence
-      if (node.absX !== undefined && node.absY !== undefined) {
-        result.set(node.id, { ...node, x: node.absX, y: node.absY });
-        continue;
-      }
-
-      const row = node.row ?? autoRow;
-      const col = node.col ?? autoCol;
-
-      // For LR/RL directions, col drives horizontal (X) and row drives vertical (Y)
-      // In TB mode: col→X, row→Y (normal). In LR mode: same, but swap spacing.
-      const isHorizontal = this.direction === "LR" || this.direction === "RL";
-      result.set(node.id, {
-        ...node,
-        x: node.absX ?? (BASE_X + col * (isHorizontal ? ROW_SPACING : COL_SPACING)),
-        y: node.absY ?? (BASE_Y + row * (isHorizontal ? COL_SPACING : ROW_SPACING)),
-      });
-
-      if (node.row === undefined && node.col === undefined) {
-        autoCol++;
-        if (autoCol >= maxColsPerRow) {
-          autoCol = 0;
-          autoRow++;
-        }
-      }
-    }
-
     return result;
   }
 
