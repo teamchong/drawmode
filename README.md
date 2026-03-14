@@ -226,12 +226,12 @@ interface GroupOpts {
 |--------|-------------|----------|
 | `excalidraw` | `.excalidraw` JSON file | File system access |
 | `url` | Shareable excalidraw.com link (no auth needed) | Network access |
-| `png` | PNG image at 2x resolution | puppeteer (optional dep) |
-| `svg` | SVG markup | puppeteer (optional dep) |
+| `png` | PNG image at 2x resolution | WASM (built-in) |
+| `svg` | SVG markup | linkedom (built-in) |
 
 Pass an array for multiple formats in one call: `format: ["excalidraw", "png"]`.
 
-PNG and SVG export uses headless Chrome via puppeteer to render through the official Excalidraw library. puppeteer is an optional dependency -- export gracefully fails if not installed.
+PNG and SVG export uses linkedom (pure JS DOM) to run Excalidraw's `exportToSvg()` server-side, then PlutoSVG WASM for SVG→PNG conversion. No browser or puppeteer needed.
 
 ## Themes
 
@@ -384,7 +384,7 @@ return d.render({ format: "url" });
 
 ```bash
 pnpm install              # Install dependencies
-pnpm build                # Build TS + WASM (Zig failure is non-fatal)
+pnpm build                # Build TS + WASM (fails if Zig build fails)
 pnpm build:wasm           # Build WASM module + wasm-opt
 pnpm dev                  # Dev server (HTTP mode on port 3001)
 pnpm test                 # Run vitest tests
@@ -404,17 +404,19 @@ drawmode/
 │   ├── executor.ts       # Code executor (new Function + Diagram subclass)
 │   ├── layout.ts         # Layout bridge (loads Zig WASM with Graphviz)
 │   ├── upload.ts         # Excalidraw.com upload (encrypt + POST)
-│   ├── png.ts            # PNG/SVG export (puppeteer + Excalidraw CDN)
+│   ├── png.ts            # PNG/SVG export (linkedom + PlutoSVG WASM)
+│   ├── svg-render.ts     # linkedom DOM setup + Excalidraw exportToSvg
 │   ├── types.ts          # Shared types
 │   ├── sdk-types.ts      # SDK type definitions string (embedded in tool description)
 │   └── widget.html       # HTML widget for Claude Desktop / Cowork
 ├── wasm/
 │   └── src/
-│       ├── main.zig      # WASM exports (layoutGraph, validate, zlibCompress)
+│       ├── main.zig      # WASM exports (layoutGraph, validate, zlibCompress, svgToPng)
 │       ├── layout.zig    # Graphviz layout (C lib statically linked)
 │       ├── arrows.zig    # Arrow routing
 │       ├── validate.zig  # Structural validation
 │       ├── compress.zig  # Zlib compression (RFC 1950/1951)
+│       ├── svg2png.zig   # SVG→PNG via PlutoSVG/PlutoVG (statically linked)
 │       ├── font.zig      # Font metrics
 │       └── util.zig      # Shared utilities
 └── worker/
