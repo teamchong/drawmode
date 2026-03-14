@@ -25,17 +25,19 @@ drawmode/
 │   ├── executor.ts          # Local executor (new Function + Diagram subclass)
 │   ├── layout.ts            # Layout bridge (loads Zig WASM with statically-linked Graphviz)
 │   ├── upload.ts            # Excalidraw.com upload (encrypt + POST)
-│   ├── png.ts               # Image export (PNG/SVG via puppeteer + Excalidraw CDN)
+│   ├── png.ts               # Image export (linkedom + PlutoSVG WASM, no browser)
+│   ├── svg-render.ts        # linkedom DOM setup + Excalidraw exportToSvg + font embedding
 │   ├── types.ts             # Shared types (ColorPreset, ShapeOpts, ConnectOpts, etc.)
 │   ├── sdk-types.ts         # SDK type definitions string (embedded in tool description)
 │   └── widget.html          # MCP Apps HTML widget for Claude Desktop/Cowork
 ├── wasm/                    # Zig WASM module
 │   ├── src/
-│   │   ├── main.zig         # WASM exports (alloc, resetHeap, layoutGraph, routeArrows, validate)
+│   │   ├── main.zig         # WASM exports (alloc, resetHeap, layoutGraph, routeArrows, validate, svgToPng)
 │   │   ├── layout.zig       # Graphviz layout (C lib statically linked)
 │   │   ├── arrows.zig       # Arrow routing
 │   │   ├── validate.zig     # Structural validation
 │   │   ├── compress.zig     # Zlib compression (RFC 1950/1951)
+│   │   ├── svg2png.zig      # SVG→PNG via PlutoSVG/PlutoVG (statically linked C libs)
 │   │   ├── font.zig         # Font metrics
 │   │   └── util.zig         # Shared utilities
 │   └── build.zig
@@ -70,6 +72,7 @@ A single Zig WASM binary with Graphviz C statically linked. Handles layout, edge
 | `routeArrows` | Arrow endpoint routing |
 | `validate` | Structural validation (bound text, duplicate IDs, overlapping elements) |
 | `zlibCompress` | Zlib compression for excalidraw.com upload |
+| `svgToPng` | SVG→PNG via PlutoSVG/PlutoVG (conditional: `-Denable_svg2png`) |
 
 Input/output is JSON bytes — the TypeScript layer serializes to JSON, passes to WASM, and reads back results.
 
@@ -106,12 +109,12 @@ The SDK handles these Excalidraw quirks so the LLM doesn't have to:
 
 ## Image Export Pipeline
 
-PNG and SVG export uses headless Chrome (puppeteer) to load the Excalidraw library from CDN and call `ExcalidrawLib.exportToSvg()` — the same rendering pipeline as the Excalidraw web app.
+PNG and SVG export uses linkedom (pure JS DOM shim) to run Excalidraw's `exportToSvg()` server-side, then PlutoSVG WASM for SVG→PNG conversion. No browser or puppeteer needed.
 
-- **PNG**: SVG → canvas at 2x resolution → `toDataURL("image/png")`
-- **SVG**: Direct `XMLSerializer.serializeToString()` of the SVG element
-- **CDN**: Pinned to `@excalidraw/excalidraw@0.17.6`
-- **Optional**: `puppeteer` is in `optionalDependencies` — PNG/SVG export gracefully fails if not installed
+- **SVG**: linkedom provides DOM → Excalidraw `exportToSvg()` → SVG string via `renderSvgWasm()`
+- **PNG**: SVG string → PlutoSVG WASM (`svgToPng` in `svg2png.zig`) → PNG at 2x retina via `renderPngWasm()`
+- **Fonts**: Virgil.ttf + Assistant-Regular.ttf embedded via `@embedFile` in Zig WASM
+- **No fallbacks**: If WASM is not loaded, export throws. No puppeteer, no graceful degradation.
 
 ## System Overview
 
@@ -125,17 +128,17 @@ PNG and SVG export uses headless Chrome (puppeteer) to load the Excalidraw libra
 |---------|---------|
 | `@modelcontextprotocol/sdk` | MCP protocol (McpServer, transports) |
 | `zod` | Schema validation for MCP tool parameters |
-| `puppeteer` (optional) | Headless Chrome for PNG/SVG export |
+| `linkedom` | Pure JS DOM shim for server-side Excalidraw SVG rendering |
 
 ### Zig
 
-No external dependencies. Standard library only.
+No external dependencies. Standard library only. Vendor C libs (PlutoSVG, PlutoVG) statically linked for SVG→PNG.
 
 ## Development
 
 ```bash
 pnpm install              # Install dependencies
-pnpm build                # Build TS + WASM (Zig failure non-fatal)
+pnpm build                # Build TS + WASM (fails fast if Zig fails)
 pnpm build:wasm           # Build WASM module only
 pnpm dev                  # Dev server (HTTP mode)
 pnpm test                 # Run tests

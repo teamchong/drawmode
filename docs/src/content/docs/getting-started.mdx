@@ -59,8 +59,8 @@ This produces a shareable [excalidraw.com](https://excalidraw.com) URL printed i
 |--------|-------------|----------|
 | `excalidraw` | `.excalidraw` JSON file | Claude Code, Cursor, VS Code |
 | `url` | Shareable excalidraw.com link | All clients |
-| `png` | PNG image (requires puppeteer) | Local with puppeteer, Cloudflare Worker |
-| `svg` | SVG markup | Local with puppeteer |
+| `png` | PNG image at 2x resolution | All (built-in via WASM) |
+| `svg` | SVG markup | All (built-in via linkedom) |
 
 ## How It Works
 
@@ -92,6 +92,6 @@ See [Iterating on Diagrams](/drawmode/iterating/#mermaid-import) for supported M
 
 **Diagram is blank or missing elements?** Check that your code returns `d.render()` — a missing `return` statement is the most common cause.
 
-**PNG/SVG export fails?** Install puppeteer: `npm install puppeteer`. It's optional — other formats work without it.
+**PNG/SVG export fails?** Ensure the WASM module is built: `pnpm build`. PNG/SVG export uses linkedom + PlutoSVG WASM — no browser or external dependencies needed.
 
 **"Cannot find module" errors?** Make sure `npx drawmode --stdio` runs successfully on its own before configuring your MCP client.

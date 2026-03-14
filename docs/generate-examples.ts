@@ -142,8 +142,8 @@ async function main() {
         console.log(`  -> rendered (no file path returned)`);
       }
     } catch (err: any) {
-      if (!pngFailed && err.message?.includes("puppeteer")) {
-        console.warn(`  PNG export unavailable (puppeteer not installed). Falling back to .excalidraw files.`);
+      if (!pngFailed && err.message?.includes("WASM")) {
+        console.warn(`  PNG export unavailable (WASM not loaded). Falling back to .excalidraw files.`);
         pngFailed = true;
       }
       // Fall back to .excalidraw format

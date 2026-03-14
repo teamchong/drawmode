@@ -54,29 +54,15 @@ The Worker requires these compatibility flags in `wrangler.toml`:
 - `nodejs_compat` — Node.js API compatibility
 - `unsafe_eval` — required for `new Function()` code execution
 
-### PNG Export on Workers
+### PNG/SVG Export
 
-The Worker supports PNG export via [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) — headless Chromium on the edge renders pixel-perfect PNGs using the Excalidraw renderer.
+PNG and SVG export is built-in — no browser or external dependencies needed. Both local and Worker deployments use the same pipeline:
 
-- Free tier includes 10 minutes/day of browser rendering time
-- For local dev with browser rendering: `cd worker && npx wrangler dev --remote`
+1. linkedom (pure JS DOM shim) runs Excalidraw's `exportToSvg()` server-side
+2. **SVG**: The SVG string is returned directly
+3. **PNG**: The SVG is passed to PlutoSVG WASM (`svgToPng`) which renders at 2x retina resolution
 
-## PNG/SVG Export (Local)
-
-Local PNG and SVG export requires [puppeteer](https://pptr.dev/):
-
-```bash
-npm install puppeteer
-```
-
-puppeteer is listed in `optionalDependencies` — if not installed, PNG/SVG export gracefully fails and other formats continue to work.
-
-The export pipeline:
-1. Launches headless Chrome via puppeteer
-2. Loads `@excalidraw/excalidraw@0.17.6` from CDN
-3. Calls `ExcalidrawLib.exportToSvg()` with the diagram elements
-4. **PNG**: Renders SVG to canvas at 2x resolution, exports as PNG
-5. **SVG**: Serializes the SVG element directly
+Fonts (Virgil, Assistant) are embedded in the WASM binary via `@embedFile`.
 
 ## Publishing
 
