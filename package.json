@@ -4,6 +4,15 @@
   "packageManager": "pnpm@10.21.0",
   "description": "Code Mode MCP server for generating Excalidraw architecture diagrams with auto-layout",
   "type": "module",
+  "author": "Steven Chong",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/teamchong/drawmode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/teamchong/drawmode/issues"
+  },
+  "homepage": "https://teamchong.github.io/drawmode/",
   "bin": {
     "drawmode": "./dist/index.js"
   },
@@ -29,6 +38,8 @@
   "files": [
     "dist",
     "!dist/*.test.*",
+    "!dist/__snapshots__",
+    "!dist/visual-test-helpers.*",
     "wasm/zig-out/bin/drawmode.wasm",
     "README.md",
     "LICENSE"
