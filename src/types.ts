@@ -107,6 +107,12 @@ export interface ShapeOpts {
   icon?: string;
 }
 
+/** ER cardinality marker rendered alongside the edge label. */
+export type Cardinality = "1:1" | "1:N" | "N:1" | "N:M";
+
+/** UML relationship style. Maps to a specific arrowhead pair on the edge. */
+export type Relation = "inheritance" | "composition" | "aggregation" | "dependency" | "association";
+
 /** Options for connecting two elements */
 export interface ConnectOpts {
   style?: StrokeStyle;
@@ -124,6 +130,16 @@ export interface ConnectOpts {
   labelPosition?: "start" | "middle" | "end";
   /** Arbitrary custom metadata stored on the arrow element */
   customData?: Record<string, unknown> | null;
+  /** ER cardinality (e.g. "1:N") prepended to the edge label. */
+  cardinality?: Cardinality;
+  /** UML relation style — picks specific arrowheads automatically:
+   *    inheritance → triangle (open) at target end (UML "is-a")
+   *    composition → diamond (filled) at source end (UML "owns")
+   *    aggregation → diamond (outline) at source end (UML "has-a")
+   *    dependency  → dashed line, plain arrow at target end
+   *    association → plain solid line, no arrowheads
+   *  Setting `relation` overrides startArrowhead/endArrowhead/style. */
+  relation?: Relation;
 }
 
 // ── Zod Schemas for Excalidraw elements ──
@@ -201,8 +217,30 @@ export const EXCALIDRAW_VERSION = 2;
 /** Layout direction for Graphviz rankdir */
 export type LayoutDirection = "TB" | "LR" | "RL" | "BT";
 
-/** Diagram type */
-export type DiagramType = "architecture" | "sequence";
+/** Diagram type.
+ *
+ *  Two categories at the LAYOUT level:
+ *    - "sequence" triggers the vertical actors + horizontal-messages
+ *      chronological renderer.
+ *    - Everything else falls through to the generic Graphviz layout
+ *      (boxes/ellipses/diamonds/tables/classes connected via edges).
+ *
+ *  The sub-types within the generic category ("architecture",
+ *  "flowchart", "state", "orgchart", "er", "class", "swimlane") are
+ *  presentational — they tell the model which shapes to prefer and
+ *  which rules to follow, but share the underlying renderer. Listed
+ *  exhaustively here so the type system matches every string that the
+ *  SDK prompts can produce.
+ */
+export type DiagramType =
+  | "architecture"
+  | "sequence"
+  | "flowchart"
+  | "state"
+  | "orgchart"
+  | "er"
+  | "class"
+  | "swimlane";
 
 /** Theme preset names */
 export type ThemePreset = "default" | "sketch" | "blueprint" | "minimal";
@@ -259,11 +297,46 @@ export interface GroupOpts {
   opacity?: number;
 }
 
+/** A single column row inside an ER table or UML class compound node. */
+export interface TableColumn {
+  /** Column / attribute name. */
+  name: string;
+  /** Optional type or value annotation rendered to the right of the name
+   *  (e.g. "INT", "VARCHAR(100)" for ER, or "string" / "void" for UML). */
+  type?: string;
+  /** Key marker rendered as a prefix sigil. PK = primary key, FK = foreign key. */
+  key?: "PK" | "FK";
+}
+
+/** UML visibility for class members. Rendered as the leading sigil on each row:
+ *  + public, - private, # protected, ~ package. Defaults to + when omitted. */
+export type Visibility = "public" | "private" | "protected" | "package";
+
+/** A single attribute or method row inside an addClass compound node. */
+export interface ClassMember {
+  /** Member name (attribute name or method signature like "save()"). */
+  name: string;
+  /** Optional type annotation. For attributes: the type. For methods: return type. */
+  type?: string;
+  /** UML visibility marker. Defaults to "public". */
+  visibility?: Visibility;
+}
+
 /** Internal node representation before layout */
 export interface GraphNode {
   id: string;
+  /** Canonical label as the user wrote it. Used for findByLabel / getNode
+   *  lookup and for code regeneration in toCode(). Never includes the icon
+   *  emoji prefix — that belongs on displayLabel and is a render concern. */
   label: string;
-  type: "rectangle" | "ellipse" | "diamond" | "text" | "line";
+  /** Rendered label with icon emoji prepended (e.g. "🔍\nSearch"). Set only
+   *  when an icon was supplied; otherwise undefined and renderers fall back
+   *  to `label`. Splitting this lets _resolveNodeRef match by canonical
+   *  label even when an icon mutates the rendered text. */
+  displayLabel?: string;
+  /** Node shape class. "table" (ER) and "class" (UML) are compound multi-row
+   *  primitives that graphviz still treats as a single layout node. */
+  type: "rectangle" | "ellipse" | "diamond" | "text" | "line" | "table" | "class";
   row?: number;
   col?: number;
   width: number;
@@ -276,6 +349,12 @@ export interface GraphNode {
   absY?: number;
   /** For line elements: array of [x,y] point pairs */
   linePoints?: [number, number][];
+  /** For "table" type: ordered column rows rendered inside the outer rect. */
+  tableColumns?: TableColumn[];
+  /** For "class" type: attributes section (rendered between header and methods). */
+  classAttributes?: ClassMember[];
+  /** For "class" type: methods section (rendered below attributes). */
+  classMethods?: ClassMember[];
 }
 
 /** Internal edge representation before layout */

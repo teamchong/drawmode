@@ -9,6 +9,7 @@ import type {
   Arrowhead, TextAlign, VerticalAlign, ColorPair,
   ExcalidrawElement, ExcalidrawFile, OutputFormat,
   ThemePreset, ThemeOpts, LayoutDirection, DiagramType, GroupOpts,
+  TableColumn, ClassMember, Visibility, Relation,
 } from "./types.js";
 import { COLOR_PALETTE, EXCALIDRAW_VERSION, ExcalidrawFileSchema } from "./types.js";
 import {
@@ -389,6 +390,12 @@ export class Diagram {
   private edges: GraphEdge[] = [];
   private groups = new Map<string, { label: string; children: string[]; opts?: GroupOpts }>();
   private frames = new Map<string, { name: string; children: string[] }>();
+  /** Swimlanes: ordered horizontal strips that lock their children to a
+   *  specific row in the layout grid. The lane index becomes the row, the
+   *  user supplies the col (the sequence position within the lane). At
+   *  render time each lane gets a header bar + a coloured background
+   *  rectangle drawn behind its members. */
+  private lanes = new Map<string, { name: string; children: string[]; index: number; opts?: GroupOpts }>();
   /** Passthrough elements from fromFile() — re-emitted unchanged */
   private passthrough: ExcalidrawElement[] = [];
   private idCounter = 0;
@@ -425,6 +432,13 @@ export class Diagram {
     this.direction = direction;
   }
 
+  /** Switch the diagram type — "architecture" (default), "sequence", etc.
+   *  Needed because the LLM driver creates the Diagram before seeing the user
+   *  prompt, so it can't pass `type` to the constructor. */
+  setType(type: DiagramType): void {
+    this.diagramType = type;
+  }
+
   private nextId(prefix: string): string {
     return `${prefix}_${++this.idCounter}_${SESSION_SEED}`;
   }
@@ -444,17 +458,338 @@ export class Diagram {
     return this.addShape("dia", "diamond", label, opts);
   }
 
+  /** Add an ER table — a compound multi-row primitive that graphviz still
+   *  treats as one node. Renders as one outer rectangle with a header row
+   *  showing the table name and N data rows showing column entries.
+   *
+   *  @param name     Table name shown in the header row.
+   *  @param columns  Ordered list of column rows. Each row gets one line
+   *                  inside the table rectangle.
+   *  @param opts     Optional ShapeOpts (color, row, col). Icons are not
+   *                  rendered on tables — there's no room for them.
+   */
+  addTable(name: string, columns: TableColumn[], opts?: ShapeOpts): string {
+    if (!Array.isArray(columns) || columns.length === 0) {
+      throw new Error(`addTable("${name}"): columns must be a non-empty array`);
+    }
+    const id = this.nextId("tbl");
+    const mergedOpts: ShapeOpts | undefined = Object.keys(this.themeDefaults).length > 0
+      ? { ...this.themeDefaults, ...opts } as ShapeOpts
+      : opts;
+
+    // Compute the table's intrinsic width: max of the header line width and
+    // every formatted column line width, plus padding. The render path uses
+    // the same formatter so what we measure here is what gets drawn.
+    const fontSize = mergedOpts?.fontSize ?? 16;
+    const ff: FontFamily = mergedOpts?.fontFamily ?? 1;
+    const headerLine = name;
+    const columnLines = columns.map(c => Diagram.formatTableRow(c));
+    const allLines = [headerLine, ...columnLines];
+    let maxLineWidth = 0;
+    for (const line of allLines) {
+      const m = measureText(line, fontSize, ff);
+      if (m.width > maxLineWidth) maxLineWidth = m.width;
+    }
+    const horizontalPadding = 24; // 12px on each side
+    const computedWidth = mergedOpts?.width ?? Math.max(DEFAULT_WIDTH, maxLineWidth + horizontalPadding);
+
+    // Height: header row + one row per column. Each row is a fixed
+    // multiple of the font size so dividers line up cleanly regardless of
+    // measured text height variation between rows.
+    const rowHeight = Math.max(28, Math.round(fontSize * 1.6));
+    const computedHeight = mergedOpts?.height ?? rowHeight * (1 + columns.length);
+
+    this.nodes.set(id, {
+      id, label: name, type: "table",
+      tableColumns: columns,
+      row: mergedOpts?.row, col: mergedOpts?.col,
+      width: computedWidth,
+      height: computedHeight,
+      // Use a slightly lighter "database" preset by default since tables
+      // are most often database entities.
+      color: resolveColor(mergedOpts, "database"),
+      opts: mergedOpts,
+      absX: mergedOpts?.x,
+      absY: mergedOpts?.y,
+    });
+    return id;
+  }
+
+  /** Format one column row for measurement and render. Centralised so the
+   *  measure pass and emit pass cannot drift apart. */
+  private static formatTableRow(c: TableColumn): string {
+    const sigil = c.key === "PK" ? "🔑 " : c.key === "FK" ? "🔗 " : "";
+    const typePart = c.type ? `: ${c.type}` : "";
+    return `${sigil}${c.name}${typePart}`;
+  }
+
+  /** Format one class member row (attribute or method). UML visibility
+   *  shows as a leading sigil: + public, - private, # protected, ~ package. */
+  private static formatClassMember(m: ClassMember): string {
+    const sigil = Diagram.visibilitySigil(m.visibility);
+    const typePart = m.type ? `: ${m.type}` : "";
+    return `${sigil} ${m.name}${typePart}`;
+  }
+
+  private static visibilitySigil(v?: Visibility): string {
+    switch (v) {
+      case "private":   return "-";
+      case "protected": return "#";
+      case "package":   return "~";
+      case "public":
+      default:          return "+";
+    }
+  }
+
+  /** Render a multi-row compound node (table / class) into the elements list.
+   *  Layout: row 0 is the centered header, rows 1..N are body rows. A divider
+   *  line is drawn under every row except the last; entries in
+   *  `thickDividerAfter` get a heavy solid divider (section break), all
+   *  other dividers are light dotted lines (per-row separation).
+   *
+   *  All rows share the same height so divider geometry stays aligned with
+   *  the height computed by addTable / addClass. */
+  private static emitCompoundNode(
+    elements: ExcalidrawElement[],
+    node: PositionedNode,
+    rows: { text: string; align: "left" | "center" }[],
+    thickDividerAfter: Set<number>,
+    o: ShapeOpts | undefined,
+  ): void {
+    const ff: FontFamily = o?.fontFamily ?? 1;
+    const fontSize = o?.fontSize ?? 16;
+    const rowHeight = node.height / rows.length;
+    const baseX = node.x!;
+    const baseY = node.y!;
+
+    // 1. Outer rectangle (the compound border).
+    elements.push({
+      id: node.id,
+      type: "rectangle",
+      x: baseX, y: baseY,
+      width: node.width, height: node.height,
+      backgroundColor: o?.backgroundColor ?? node.color.background,
+      strokeColor: o?.strokeColor ?? node.color.stroke,
+      fillStyle: o?.fillStyle ?? "solid",
+      strokeWidth: o?.strokeWidth ?? 2,
+      roughness: o?.roughness ?? 1,
+      opacity: o?.opacity ?? 100,
+      angle: 0,
+      strokeStyle: o?.strokeStyle ?? "solid",
+      roundness: o?.roundness !== undefined ? o.roundness : { type: 3 },
+      // No bound text — header lives in its own standalone element so it
+      // sits at the top of the compound rather than centered in the whole rect.
+      boundElements: null,
+      groupIds: [],
+      frameId: null,
+      isDeleted: false,
+      updated: Date.now(),
+      locked: false,
+      link: o?.link ?? null,
+      seed: randSeed(),
+      version: 1,
+      versionNonce: randSeed(),
+      ...(o?.customData !== undefined ? { customData: o.customData } : {}),
+    });
+
+    // 2. Each row: a text element + (unless it's the last row) a divider below.
+    for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+      const row = rows[rowIdx];
+      const rowY = baseY + rowHeight * rowIdx;
+      const measured = measureText(row.text, fontSize, ff);
+      const isHeader = rowIdx === 0;
+      const textHeight = Math.max(20, measured.height);
+
+      // Position: header centered, body rows left-aligned with 12px padding.
+      const textX = row.align === "center"
+        ? baseX + (node.width - measured.width) / 2
+        : baseX + 12;
+
+      elements.push({
+        id: isHeader ? `${node.id}-header` : `${node.id}-row${rowIdx - 1}`,
+        type: "text",
+        x: textX,
+        y: rowY + (rowHeight - textHeight) / 2,
+        width: measured.width || 1,
+        height: textHeight,
+        text: row.text,
+        fontSize,
+        fontFamily: ff,
+        lineHeight: getLineHeight(ff),
+        textAlign: row.align,
+        verticalAlign: "middle",
+        containerId: null,
+        originalText: row.text,
+        autoResize: true,
+        strokeColor: o?.strokeColor ?? node.color.stroke,
+        backgroundColor: "transparent",
+        fillStyle: "solid",
+        strokeWidth: 1,
+        roughness: 0,
+        opacity: o?.opacity ?? 100,
+        angle: 0,
+        groupIds: [],
+        frameId: null,
+        isDeleted: false,
+        boundElements: null,
+        updated: Date.now(),
+        locked: false,
+        link: null,
+        seed: randSeed(),
+        version: 1,
+        versionNonce: randSeed(),
+      });
+
+      // Skip the divider after the last row — the bottom of the compound is
+      // the outer rect's bottom edge.
+      if (rowIdx === rows.length - 1) continue;
+
+      const isThick = thickDividerAfter.has(rowIdx);
+      elements.push({
+        id: `${node.id}-div${rowIdx}`,
+        type: "line",
+        x: baseX, y: rowY + rowHeight,
+        width: node.width, height: 0,
+        points: [[0, 0], [node.width, 0]],
+        strokeColor: o?.strokeColor ?? node.color.stroke,
+        backgroundColor: "transparent",
+        fillStyle: "solid",
+        strokeWidth: isThick ? 2 : 1,
+        strokeStyle: isThick ? "solid" : "dotted",
+        roughness: 0,
+        opacity: isThick ? (o?.opacity ?? 100) : 60,
+        angle: 0,
+        roundness: null,
+        startBinding: null,
+        endBinding: null,
+        startArrowhead: null,
+        endArrowhead: null,
+        groupIds: [],
+        frameId: null,
+        isDeleted: false,
+        boundElements: null,
+        updated: Date.now(),
+        locked: false,
+        link: null,
+        seed: randSeed(),
+        version: 1,
+        versionNonce: randSeed(),
+      });
+    }
+  }
+
+  /** Add a UML class — three-compartment compound primitive (header /
+   *  attributes / methods). Sized as one layout node like addTable.
+   *
+   *  @param name        Class name shown in the header compartment.
+   *  @param attributes  Optional attribute rows (fields / properties).
+   *  @param methods     Optional method rows (operations).
+   *  @param opts        Optional ShapeOpts. Icons are not rendered on classes.
+   */
+  addClass(
+    name: string,
+    members: { attributes?: ClassMember[]; methods?: ClassMember[] },
+    opts?: ShapeOpts,
+  ): string {
+    const attributes = members.attributes ?? [];
+    const methods = members.methods ?? [];
+    if (attributes.length === 0 && methods.length === 0) {
+      throw new Error(`addClass("${name}"): must have at least one attribute or method`);
+    }
+    const id = this.nextId("cls");
+    const mergedOpts: ShapeOpts | undefined = Object.keys(this.themeDefaults).length > 0
+      ? { ...this.themeDefaults, ...opts } as ShapeOpts
+      : opts;
+
+    // Compute width from the widest formatted line (header, attributes, methods).
+    const fontSize = mergedOpts?.fontSize ?? 16;
+    const ff: FontFamily = mergedOpts?.fontFamily ?? 1;
+    const attrLines = attributes.map(a => Diagram.formatClassMember(a));
+    const methodLines = methods.map(m => Diagram.formatClassMember(m));
+    const allLines = [name, ...attrLines, ...methodLines];
+    let maxLineWidth = 0;
+    for (const line of allLines) {
+      const m = measureText(line, fontSize, ff);
+      if (m.width > maxLineWidth) maxLineWidth = m.width;
+    }
+    const horizontalPadding = 24;
+    const computedWidth = mergedOpts?.width ?? Math.max(DEFAULT_WIDTH, maxLineWidth + horizontalPadding);
+
+    // Height: header + N attributes + N methods, all at fixed row height so
+    // the divider lines stay aligned regardless of measured text variation.
+    const rowHeight = Math.max(28, Math.round(fontSize * 1.6));
+    const computedHeight = mergedOpts?.height ?? rowHeight * (1 + attributes.length + methods.length);
+
+    this.nodes.set(id, {
+      id, label: name, type: "class",
+      classAttributes: attributes,
+      classMethods: methods,
+      row: mergedOpts?.row, col: mergedOpts?.col,
+      width: computedWidth,
+      height: computedHeight,
+      color: resolveColor(mergedOpts, "backend"),
+      opts: mergedOpts,
+      absX: mergedOpts?.x,
+      absY: mergedOpts?.y,
+    });
+    return id;
+  }
+
+  /** Map a UML relation to start/end arrowheads + stroke style. Centralised
+   *  so the connect path and tests use the same mapping. */
+  private static relationArrowheads(rel: Relation): { startArrowhead: Arrowhead; endArrowhead: Arrowhead; style: StrokeStyle } {
+    switch (rel) {
+      // Inheritance (is-a): plain line, hollow triangle at the parent (target) end.
+      // Excalidraw doesn't have a "triangle outline" — "triangle" is filled,
+      // which is the closest available marker for the UML inheritance arrow.
+      case "inheritance":
+        return { startArrowhead: null, endArrowhead: "triangle", style: "solid" };
+      // Composition (filled diamond at the WHOLE end / source).
+      case "composition":
+        return { startArrowhead: "diamond", endArrowhead: "arrow", style: "solid" };
+      // Aggregation (open diamond at the WHOLE end / source).
+      case "aggregation":
+        return { startArrowhead: "diamond_outline", endArrowhead: "arrow", style: "solid" };
+      // Dependency: dashed line, plain arrow.
+      case "dependency":
+        return { startArrowhead: null, endArrowhead: "arrow", style: "dashed" };
+      // Association: plain undirected line.
+      case "association":
+        return { startArrowhead: null, endArrowhead: null, style: "solid" };
+    }
+  }
+
+  /** Build the rendered label by prepending the icon emoji, if any.
+   *  Returns the same string when no icon is set so callers can compare
+   *  identity to detect "did the icon prefix actually do anything". */
+  private static applyIconPrefix(label: string, opts?: ShapeOpts): string {
+    if (!opts?.icon) return label;
+    const emoji = ICON_PRESETS[opts.icon] ?? opts.icon;
+    return `${emoji}\n${label}`;
+  }
+
   private addShape(prefix: string, type: GraphNode["type"], label: string, opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): string {
     const id = this.nextId(prefix);
+    this._registerNode(id, type, label, opts, defaultPreset);
+    return id;
+  }
+
+  /** Write a GraphNode entry into `this.nodes` with theme/icon/measurement
+   *  handling. Shared by addShape and addActor so both paths produce nodes
+   *  with identical layout metadata — before this was extracted addActor
+   *  only pushed to sequenceActors, leaving connect() unable to resolve
+   *  actor identifiers in non-sequence diagrams. */
+  private _registerNode(id: string, type: GraphNode["type"], label: string, opts: ShapeOpts | undefined, defaultPreset: ColorPreset): void {
     // Merge theme defaults under per-node opts (per-node wins)
     const mergedOpts: ShapeOpts | undefined = Object.keys(this.themeDefaults).length > 0
       ? { ...this.themeDefaults, ...opts } as ShapeOpts
       : opts;
-    let displayLabel = label;
-    if (mergedOpts?.icon) {
-      const emoji = ICON_PRESETS[mergedOpts.icon] ?? mergedOpts.icon;
-      displayLabel = `${emoji}\n${label}`;
-    }
+    // Canonical label vs. rendered label: store the user's original `label`
+    // verbatim so findByLabel/getNode/_resolveNodeRef can match it, and only
+    // set displayLabel when the icon prefix actually changes the text.
+    const displayLabel = Diagram.applyIconPrefix(label, mergedOpts);
+    const hasIconPrefix = displayLabel !== label;
+    // Measurements always use the rendered text (that's what gets drawn).
     const extraLines = displayLabel.split("\n").length - 1;
     const measured = measureText(displayLabel, mergedOpts?.fontSize ?? 16, mergedOpts?.fontFamily ?? 1);
     const autoWidth = Math.max(DEFAULT_WIDTH, measured.width + 40);
@@ -462,7 +797,8 @@ export class Diagram {
     const minTextHeight = measured.height + 20;
     const computedHeight = mergedOpts?.height ?? (DEFAULT_HEIGHT + extraLines * EXTRA_LINE_PX);
     this.nodes.set(id, {
-      id, label: displayLabel, type,
+      id, label, type,
+      ...(hasIconPrefix ? { displayLabel } : {}),
       row: mergedOpts?.row, col: mergedOpts?.col,
       width: mergedOpts?.width ?? autoWidth,
       height: Math.max(computedHeight, minTextHeight),
@@ -471,7 +807,6 @@ export class Diagram {
       absX: mergedOpts?.x,
       absY: mergedOpts?.y,
     });
-    return id;
   }
 
   /** Add standalone text (no container shape). Returns the element ID. */
@@ -482,7 +817,7 @@ export class Diagram {
   }): string {
     const id = this.nextId("txt");
     const preset = opts?.color ?? "backend";
-    const paletteColor = COLOR_PALETTE[preset];
+    const paletteColor = COLOR_PALETTE[preset] ?? COLOR_PALETTE["backend"];
     const strokeColor = opts?.strokeColor ?? paletteColor.stroke;
     const fontSize = opts?.fontSize ?? 16;
     const textMeasured = measureText(text, fontSize, opts?.fontFamily ?? 1);
@@ -519,29 +854,25 @@ export class Diagram {
   }
 
   /** Group elements together with a dashed boundary and label.
-   *  Children can be node IDs or other group IDs (for nesting). */
+   *  Children can be node IDs, node labels, or other group IDs (for nesting).
+   *
+   *  Children are stored as raw refs; the real linkup to node ids runs at
+   *  render time via `resolveDeferred()`. Unresolvable refs are dropped
+   *  silently there, not thrown here — this lets callers assemble diagrams
+   *  in any order and gracefully ignore typos / stale refs. */
   addGroup(label: string, children: string[], opts?: GroupOpts): string {
-    for (const cid of children) {
-      if (!this.nodes.has(cid) && !this.groups.has(cid)) {
-        if (this.frames.has(cid)) throw new Error(`Cannot add frame "${cid}" to a group. Groups can contain nodes or other groups.`);
-        throw new Error(`Child not found: "${cid}". Add nodes before grouping them.`);
-      }
-    }
     const id = this.nextId("grp");
-    this.groups.set(id, { label, children, opts });
+    this.groups.set(id, { label, children: [...children], opts });
     return id;
   }
 
-  /** Add a native Excalidraw frame container. Returns the frame ID. */
+  /** Add a native Excalidraw frame container. Returns the frame ID.
+   *  Children can be node IDs, node labels, or group IDs.
+   *
+   *  Children stored raw and resolved at render time (see addGroup). */
   addFrame(name: string, children: string[]): string {
-    for (const cid of children) {
-      if (!this.nodes.has(cid) && !this.groups.has(cid)) {
-        if (this.frames.has(cid)) throw new Error(`Cannot nest frame "${cid}" inside another frame.`);
-        throw new Error(`Child not found: "${cid}". Add nodes before framing them.`);
-      }
-    }
     const id = this.nextId("frm");
-    this.frames.set(id, { name, children });
+    this.frames.set(id, { name, children: [...children] });
     return id;
   }
 
@@ -557,17 +888,202 @@ export class Diagram {
     this.frames.delete(id);
   }
 
-  /** Connect two elements with an arrow. */
-  connect(from: string, to: string, label?: string, opts?: ConnectOpts): void {
-    if (!this.nodes.has(from)) {
-      if (this.groups.has(from)) throw new Error(`Cannot connect from group "${from}". Connect from a node inside the group instead.`);
-      if (this.frames.has(from)) throw new Error(`Cannot connect from frame "${from}". Connect from a node inside the frame instead.`);
-      throw new Error(`Source node not found: "${from}". Add the node before connecting it.`);
+  /**
+   * Resolve a node reference. Strictly requires the ID returned by addXxx —
+   * label-string fallback was removed so the model can't accidentally pass a
+   * human-readable label that collides across diagrams. The model must bind
+   * addXxx to a const and pass that const.
+   */
+  private _resolveNodeRef(ref: string): string | undefined {
+    if (typeof ref !== "string") return undefined;
+    return this.nodes.has(ref) ? ref : undefined;
+  }
+
+  /**
+   * Deferred-linkup resolver. Every SDK call that takes node refs (connect,
+   * message, addLane, addGroup, addFrame) stores the refs raw; this method
+   * walks those collections at render time, converts raw refs to canonical
+   * node ids, and silently drops anything unresolvable.
+   *
+   * Order matters:
+   *   1. Lanes — filter children to valid boxes, row-lock each to lane's
+   *      index + 1 so graphviz aligns the lane horizontally.
+   *   2. Groups & frames — filter children; groups may contain group refs
+   *      (nesting), frames may too. Anything else is dropped.
+   *   3. Edges & sequence messages — resolve endpoints. A lane ref resolves
+   *      to the lane's first box (for `from`) or last box (for `to`); an
+   *      empty lane means nothing to anchor to, drop the edge.
+   *
+   * Mutates collections in place; idempotent on already-resolved data
+   * because `_resolveNodeRef(X)` returns X when X is already a node id.
+   */
+  private resolveDeferred(): void {
+    // 0. Auto-infer lane membership from connect() edges. Small LLMs don't
+    //    reliably call `addLane(name, [boxes])` — they declare empty lanes
+    //    up front, then scatter `connect(lane, box)` or `connect(box, lane)`
+    //    across the code. Without inference the lanes stay empty and the
+    //    diagram renders as a flowchart with ghost lanes floating behind
+    //    it. Walk every edge: if exactly one endpoint is a lane and the
+    //    other is a box, take the membership. First lane wins per box so
+    //    later conflicting edges don't yank a box between lanes.
+    if (this.lanes.size > 0) {
+      const boxToLane = new Map<string, string>();
+      for (const [laneId, lane] of this.lanes) {
+        for (const c of lane.children) {
+          const nid = this._resolveNodeRef(c);
+          if (nid && !boxToLane.has(nid)) boxToLane.set(nid, laneId);
+        }
+      }
+      const assignToLane = (laneId: string, boxRaw: string) => {
+        const nid = this._resolveNodeRef(boxRaw);
+        if (!nid || boxToLane.has(nid)) return;
+        const lane = this.lanes.get(laneId);
+        if (!lane) return;
+        lane.children.push(nid);
+        boxToLane.set(nid, laneId);
+      };
+      for (const edge of this.edges) {
+        if (this.lanes.has(edge.from)) assignToLane(edge.from, edge.to);
+        if (this.lanes.has(edge.to)) assignToLane(edge.to, edge.from);
+      }
+
+      // Propagate membership along box→box edges until fixed-point. A flow
+      // like `reserveInventory → capturePayment → sendReceipt` should carry
+      // the starting lane through the chain so sequential steps end up in
+      // the same lane. Propagates forward (from lane'd box to its target)
+      // AND backward (from lane'd box to its source) — picks up both
+      // "upstream orphan feeds into lane'd step" and "lane'd step feeds
+      // into downstream orphan". Fixed-point loop bounded by edge count.
+      let changed = true;
+      let iter = 0;
+      const MAX_ITER = this.edges.length + 1;
+      while (changed && iter++ < MAX_ITER) {
+        changed = false;
+        for (const edge of this.edges) {
+          if (this.lanes.has(edge.from) || this.lanes.has(edge.to)) continue;
+          const fromNid = this._resolveNodeRef(edge.from);
+          const toNid = this._resolveNodeRef(edge.to);
+          if (!fromNid || !toNid) continue;
+          const fromLane = boxToLane.get(fromNid);
+          const toLane = boxToLane.get(toNid);
+          if (fromLane && !toLane) {
+            this.lanes.get(fromLane)!.children.push(toNid);
+            boxToLane.set(toNid, fromLane);
+            changed = true;
+          } else if (toLane && !fromLane) {
+            this.lanes.get(toLane)!.children.push(fromNid);
+            boxToLane.set(fromNid, toLane);
+            changed = true;
+          }
+        }
+      }
     }
-    if (!this.nodes.has(to)) {
-      if (this.groups.has(to)) throw new Error(`Cannot connect to group "${to}". Connect to a node inside the group instead.`);
-      if (this.frames.has(to)) throw new Error(`Cannot connect to frame "${to}". Connect to a node inside the frame instead.`);
-      throw new Error(`Target node not found: "${to}". Add the node before connecting it.`);
+
+    // 1. Lanes — children must resolve to real nodes. Lane refs, group refs,
+    //    typos etc. are dropped. Dedupe so the inference pass can't double-
+    //    assign a box via both explicit addLane() + connect() inference.
+    //    Valid children get their row locked.
+    for (const [, lane] of this.lanes) {
+      const kept: string[] = [];
+      const seen = new Set<string>();
+      for (const raw of lane.children) {
+        const nid = this._resolveNodeRef(raw);
+        if (!nid || seen.has(nid)) continue;
+        const node = this.nodes.get(nid);
+        if (!node) continue;
+        // Row = lane index + 1 (lane 0 → row 1, so row 0 is reserved for
+        // whatever sits above all lanes). If the same box appears in
+        // multiple lanes, last lane wins — matching the previous behaviour
+        // where eager addLane calls overwrote row on each call.
+        node.row = lane.index + 1;
+        seen.add(nid);
+        kept.push(nid);
+      }
+      lane.children = kept;
+    }
+
+    // 2. Groups — children may be nodes OR other groups (nesting). Drop
+    //    refs that are neither. Frames are not allowed inside groups.
+    for (const [, group] of this.groups) {
+      const kept: string[] = [];
+      for (const raw of group.children) {
+        const nid = this._resolveNodeRef(raw);
+        if (nid) { kept.push(nid); continue; }
+        if (this.groups.has(raw)) { kept.push(raw); continue; }
+        // lane / frame / unknown → silently dropped
+      }
+      group.children = kept;
+    }
+
+    // 3. Frames — similar to groups but no nested frames.
+    for (const [, frame] of this.frames) {
+      const kept: string[] = [];
+      for (const raw of frame.children) {
+        const nid = this._resolveNodeRef(raw);
+        if (nid) { kept.push(nid); continue; }
+        if (this.groups.has(raw)) { kept.push(raw); continue; }
+      }
+      frame.children = kept;
+    }
+
+    // Lane-endpoint auto-resolve: a lane ref in an edge endpoint becomes
+    // its first (from) or last (to) box. Must run AFTER step 1 so
+    // lane.children already holds valid node ids.
+    const resolveEndpoint = (raw: string, side: "from" | "to"): string | undefined => {
+      const lane = this.lanes.get(raw);
+      if (lane) {
+        if (lane.children.length === 0) return undefined;
+        return side === "from" ? lane.children[0] : lane.children[lane.children.length - 1];
+      }
+      if (this.groups.has(raw)) return undefined;  // groups not connectable
+      if (this.frames.has(raw)) return undefined;
+      return this._resolveNodeRef(raw);
+    };
+
+    // 4. Edges — resolve endpoints; drop the edge if either side fails.
+    this.edges = this.edges.filter(e => {
+      const f = resolveEndpoint(e.from, "from");
+      const t = resolveEndpoint(e.to, "to");
+      if (!f || !t) return false;
+      e.from = f;
+      e.to = t;
+      return true;
+    });
+
+    // 5. Sequence messages — same treatment but resolve against
+    //    sequenceActors (they ARE nodes too since addActor registers them,
+    //    so _resolveNodeRef works). Messages between non-actor ids render
+    //    fine on the sequence canvas as long as the id is in the actor
+    //    position map; the sequence renderer itself skips missing entries.
+    this.sequenceMessages = this.sequenceMessages.filter(m => {
+      const f = resolveEndpoint(m.from, "from");
+      const t = resolveEndpoint(m.to, "to");
+      if (!f || !t) return false;
+      m.from = f;
+      m.to = t;
+      return true;
+    });
+  }
+
+  /** Connect two elements with an arrow.
+   *
+   *  `from` and `to` are stored as raw strings; the real wiring to node
+   *  ids happens at render time via `resolveDeferred()`. If either ref
+   *  fails to resolve there, the edge is dropped silently — this lets
+   *  the caller (usually a small LLM) build diagrams out-of-order or
+   *  misuse lane refs without triggering a retry cascade. Lane refs
+   *  auto-resolve to the lane's first (from) or last (to) box. */
+  connect(from: string, to: string, label?: string, opts?: ConnectOpts): void {
+    // Type errors (undefined, non-string) are programmer bugs — fail loudly
+    // so the caller sees them immediately. Ref-resolution errors (string
+    // that doesn't match any node) are deferred: stored as-is and dropped
+    // silently at render if they never resolve. That's the "defer the
+    // linkup" part — no throws for out-of-order references.
+    if (typeof from !== "string") {
+      throw new Error(`connect: 'from' must be a string node ref, got ${from === undefined ? "undefined" : JSON.stringify(from)}. Assign addXxx to a const and pass that const.`);
+    }
+    if (typeof to !== "string") {
+      throw new Error(`connect: 'to' must be a string node ref, got ${to === undefined ? "undefined" : JSON.stringify(to)}. Assign addXxx to a const and pass that const.`);
     }
     this.edges.push({
       from, to, label,
@@ -889,6 +1405,8 @@ export class Diagram {
       if (eo?.elbowed === false) o.elbowed = false;
       if (eo?.labelFontSize && eo.labelFontSize !== 16) o.labelFontSize = eo.labelFontSize;
       if (eo?.labelPosition && eo.labelPosition !== "middle") o.labelPosition = eo.labelPosition;
+      if (eo?.cardinality) o.cardinality = eo.cardinality;
+      if (eo?.relation) o.relation = eo.relation;
       return o;
     };
 
@@ -974,6 +1492,13 @@ export class Diagram {
       }
       if (emittedStyles.size > 0) lines.push("");
 
+      // Pre-compute which node IDs were created via `addActor` so toCode
+      // emits `d.addActor(label)` for them instead of `d.addBox(...)`.
+      // Architecture-mode diagrams that mix addActor + addBox (produced
+      // when the model decides a human participant should still be an
+      // actor) would otherwise lose the actor intent on round-trip.
+      const actorNodeIds = new Set(this.sequenceActors.map(a => a.id));
+
       // Emit nodes
       for (const [id, node] of this.nodes) {
         if (node.type === "line") {
@@ -1006,12 +1531,56 @@ export class Diagram {
           continue;
         }
 
-        const method = node.type === "ellipse" ? "addEllipse" : node.type === "diamond" ? "addDiamond" : "addBox";
-        // Strip icon emoji prefix from label (icon is emitted as an opt)
-        let codeLabel = node.label;
-        if (node.opts?.icon && codeLabel.includes("\n")) {
-          codeLabel = codeLabel.split("\n").slice(1).join("\n");
+        // Tables get their own emit path: addTable(name, columns, opts).
+        if (node.type === "table" && node.tableColumns) {
+          const colsLiteral = node.tableColumns.map(c => {
+            const parts = [`name: ${JSON.stringify(c.name)}`];
+            if (c.type) parts.push(`type: ${JSON.stringify(c.type)}`);
+            if (c.key) parts.push(`key: ${JSON.stringify(c.key)}`);
+            return `{ ${parts.join(", ")} }`;
+          }).join(", ");
+          const tableOpts = buildShapeOpts(node);
+          // Drop width/height — addTable computes them from the columns. Keep
+          // row/col/color so layout placement and styling round-trip.
+          delete tableOpts.width;
+          delete tableOpts.height;
+          delete tableOpts.icon; // icons aren't rendered on tables
+          const optsStr = Object.keys(tableOpts).length > 0 ? `, ${stringify(tableOpts)}` : "";
+          lines.push(`const ${varName} = d.addTable(${JSON.stringify(node.label)}, [${colsLiteral}]${optsStr});`);
+          continue;
         }
+
+        // UML class: addClass(name, { attributes, methods }, opts).
+        if (node.type === "class") {
+          const formatMember = (m: ClassMember): string => {
+            const parts = [`name: ${JSON.stringify(m.name)}`];
+            if (m.type) parts.push(`type: ${JSON.stringify(m.type)}`);
+            if (m.visibility && m.visibility !== "public") parts.push(`visibility: ${JSON.stringify(m.visibility)}`);
+            return `{ ${parts.join(", ")} }`;
+          };
+          const memberSections: string[] = [];
+          if (node.classAttributes && node.classAttributes.length > 0) {
+            memberSections.push(`attributes: [${node.classAttributes.map(formatMember).join(", ")}]`);
+          }
+          if (node.classMethods && node.classMethods.length > 0) {
+            memberSections.push(`methods: [${node.classMethods.map(formatMember).join(", ")}]`);
+          }
+          const membersLiteral = `{ ${memberSections.join(", ")} }`;
+          const classOpts = buildShapeOpts(node);
+          delete classOpts.width;
+          delete classOpts.height;
+          delete classOpts.icon;
+          const optsStr = Object.keys(classOpts).length > 0 ? `, ${stringify(classOpts)}` : "";
+          lines.push(`const ${varName} = d.addClass(${JSON.stringify(node.label)}, ${membersLiteral}${optsStr});`);
+          continue;
+        }
+
+        const method = actorNodeIds.has(id)
+          ? "addActor"
+          : node.type === "ellipse" ? "addEllipse" : node.type === "diamond" ? "addDiamond" : "addBox";
+        // node.label is the canonical label (no icon prefix), so toCode can
+        // emit it directly. The icon is round-tripped via the opts object.
+        const codeLabel = node.label;
 
         // Use shared style variable if this node's style was extracted
         const styleKey = nodeStyleKeys.get(id);
@@ -1053,6 +1622,25 @@ export class Diagram {
           const varName = toVarName(group.label, `group${this.idCounter}`);
           varNames.set(id, varName);
           lines.push(`const ${varName} = d.addGroup(${JSON.stringify(group.label)}, [${childVars.join(", ")}]${optsStr});`);
+        }
+      }
+
+      // Emit lanes (swimlane / activity diagram strips). Lanes have the same
+      // optional GroupOpts shape as groups, so the round-trip emit logic
+      // mirrors the addGroup branch above.
+      if (this.lanes.size > 0) {
+        lines.push("");
+        const sortedLanes = [...this.lanes.entries()].sort((a, b) => a[1].index - b[1].index);
+        for (const [id, lane] of sortedLanes) {
+          const childVars = lane.children.map(c => varNames.get(c) ?? `"${c}"`);
+          const laneOpts: Record<string, unknown> = {};
+          if (lane.opts?.strokeColor) laneOpts.strokeColor = lane.opts.strokeColor;
+          if (lane.opts?.strokeStyle && lane.opts.strokeStyle !== "solid") laneOpts.strokeStyle = lane.opts.strokeStyle;
+          if (lane.opts?.opacity !== undefined && lane.opts.opacity !== 30) laneOpts.opacity = lane.opts.opacity;
+          const optsStr = Object.keys(laneOpts).length > 0 ? `, ${stringify(laneOpts)}` : "";
+          const varName = toVarName(lane.name, `lane${lane.index}`);
+          varNames.set(id, varName);
+          lines.push(`const ${varName} = d.addLane(${JSON.stringify(lane.name)}, [${childVars.join(", ")}]${optsStr});`);
         }
       }
 
@@ -1347,12 +1935,26 @@ export class Diagram {
     return this.edges.map(e => ({ from: e.from, to: e.to, label: e.label }));
   }
 
-  /** Get a node's properties by ID. Returns undefined if not found. */
-  getNode(id: string): { label: string; type: string; width: number; height: number;
-    backgroundColor?: string; strokeColor?: string; row?: number; col?: number } | undefined {
+  /**
+   * Get a node's properties by ID or label. Returns details (label, type,
+   * dimensions, colors, position). Returns undefined if not found.
+   *
+   * The returned object includes an `id` field so it can be used as a node
+   * reference where strings are expected — `connect(d.getNode("X"), …)` works
+   * because connect accepts either a node ID, a label, or a `{id}` object.
+   */
+  getNode(idOrLabel: string): {
+    id: string; label: string; type: string;
+    width: number; height: number;
+    backgroundColor?: string; strokeColor?: string;
+    row?: number; col?: number;
+  } | undefined {
+    const id = this._resolveNodeRef(idOrLabel);
+    if (!id) return undefined;
     const node = this.nodes.get(id);
     if (!node) return undefined;
     return {
+      id,
       label: node.label,
       type: node.type,
       width: node.width,
@@ -1379,7 +1981,7 @@ export class Diagram {
 
     // Update color
     if (update.color) {
-      node.color = COLOR_PALETTE[update.color];
+      node.color = COLOR_PALETTE[update.color] ?? COLOR_PALETTE["backend"];
     }
     if (update.strokeColor) {
       node.color = { ...node.color, stroke: update.strokeColor };
@@ -1391,6 +1993,15 @@ export class Diagram {
     // Merge remaining opts (exclude non-ShapeOpts fields)
     const { label: _, ...shapeUpdates } = update;
     node.opts = { ...node.opts, ...shapeUpdates };
+
+    // Recompute displayLabel if either label or icon changed — without this,
+    // updating the label of an icon-bearing node would leave the rendered
+    // text pointing at the old text.
+    if (update.label !== undefined || update.icon !== undefined) {
+      const newDisplay = Diagram.applyIconPrefix(node.label, node.opts);
+      if (newDisplay !== node.label) node.displayLabel = newDisplay;
+      else delete node.displayLabel;
+    }
   }
 
   /** Remove a node and all its connected edges. */
@@ -1418,18 +2029,100 @@ export class Diagram {
     });
   }
 
+  /** Add a swimlane (activity diagram lane). Lanes are horizontal strips
+   *  that lock their children to a specific row in the layout grid: the
+   *  first registered lane goes to row 1, the second to row 2, etc. The
+   *  user controls the column for each child via its addBox row/col opts,
+   *  so the natural pattern is:
+   *
+   *    const userLane = d.addLane("User", []);
+   *    const sysLane  = d.addLane("System", []);
+   *    const enter    = d.addBox("Enter creds", { row: 1, col: 1 });
+   *    const validate = d.addBox("Validate",    { row: 2, col: 2 });
+   *    d.addLane("User",   [enter]);    // overwrites the empty version
+   *    d.addLane("System", [validate]);
+   *
+   *  Or more concisely, addLane the children up front and let the lane
+   *  enforce their row constraints:
+   *
+   *    const enter    = d.addBox("Enter creds", { col: 1 });
+   *    const validate = d.addBox("Validate",    { col: 2 });
+   *    d.addLane("User",   [enter]);
+   *    d.addLane("System", [validate]);
+   *
+   *  Either way, addLane mutates each child's `row` to the lane index so
+   *  Graphviz aligns them on the same horizontal track. Connections that
+   *  cross lane boundaries draw as vertical-then-horizontal arrows.
+   *
+   *  Returns the lane ID.
+   */
+  addLane(name: string, children: string[], opts?: GroupOpts): string {
+    // Deferred linkup: children are stored as raw refs and resolved at
+    // render time. Row-locking moves to render time so addBox / addLane
+    // order doesn't matter.
+    //
+    // Dedup by name: `addLane("Customer", [])` followed later by
+    // `addLane("Customer", [validateCart])` used to create two separate
+    // lanes named "Customer" which broke rendering. Now the second call
+    // finds the existing entry and APPENDS children / replaces opts.
+    // This matches the long-standing doc comment ("overwrites the empty
+    // version") and lets LLMs declare lanes upfront then fill them later
+    // — the natural "outline first, detail second" pattern.
+    const raw = Array.isArray(children) ? [...children] : [];
+    for (const [existingId, existingLane] of this.lanes) {
+      if (existingLane.name === name) {
+        existingLane.children.push(...raw);
+        if (opts) existingLane.opts = { ...existingLane.opts, ...opts };
+        return existingId;
+      }
+    }
+    const id = this.nextId("lane");
+    const index = this.lanes.size;
+    this.lanes.set(id, { name, children: raw, index, opts });
+    return id;
+  }
+
   /** Add an actor to a sequence diagram. Returns the actor ID. */
   addActor(label: string, opts?: ShapeOpts): string {
     const id = this.nextId("actor");
     this.sequenceActors.push({ id, label, index: this.sequenceActors.length, opts });
+    // Also register as a regular graph node so `_resolveNodeRef`, `connect`,
+    // and the architecture-mode layout engine see actors. Without this,
+    // `d.addActor("User")` + `d.connect(user, browser, ...)` on a
+    // non-sequence diagram threw "Source node not found: actor_1_..." at
+    // runtime because the SDK kept actors in a separate collection the
+    // resolver never checked. `buildSequenceElements` reads only from
+    // `this.sequenceActors`, so the extra nodes entry is invisible to
+    // sequence rendering.
+    //
+    // Default to the "users" colour + users icon so actors render as
+    // human-avatar boxes in architecture mode, matching the SYSTEM_PROMPT's
+    // expectation that User/Browser entities look visually distinct from
+    // backend components.
+    const actorOpts: ShapeOpts = { icon: "users", ...opts };
+    this._registerNode(id, "rectangle", label, actorOpts, "users");
     return id;
   }
 
-  /** Add a message between actors in a sequence diagram. */
+  /** Add a message between two nodes. In sequence diagrams this renders
+   *  as a horizontal arrow between lifelines; in architecture diagrams
+   *  it renders as an edge just like `connect(...)`. Pre-fix, `message`
+   *  validated that both endpoints were in `this.sequenceActors` and
+   *  threw "Actor not found: ..." otherwise, which broke the LLM's
+   *  frequent pattern of mixing `addActor`/`addBox` with `connect`/
+   *  `message` in a single architecture diagram. Routing through
+   *  `connect()` first means the resolver handles all node kinds
+   *  uniformly and the architecture edge list picks the message up.
+   *  The `sequenceMessages` entry is kept in sync afterwards so
+   *  `buildSequenceElements` still renders messages in sequence mode. */
   message(from: string, to: string, label?: string, opts?: ConnectOpts): void {
-    const actorIds = new Set(this.sequenceActors.map(a => a.id));
-    if (!actorIds.has(from)) throw new Error(`Actor not found: "${from}". Add actors with addActor() before sending messages.`);
-    if (!actorIds.has(to)) throw new Error(`Actor not found: "${to}". Add actors with addActor() before sending messages.`);
+    // Deferred linkup — same pattern as connect(). Record raw refs in
+    // both this.edges (so architecture-mode renders still see the edge)
+    // and this.sequenceMessages (so sequence-mode renders see the
+    // message). Both get resolved at render time; an unresolvable ref
+    // drops the entry from whichever path is rendering.
+    if (typeof from !== "string" || typeof to !== "string") return;
+    this.connect(from, to, label, opts);
     this.sequenceMessages.push({ from, to, label, index: this.sequenceMessages.length, opts });
   }
 
@@ -1557,7 +2250,6 @@ export class Diagram {
     }
 
     // Write sidecar .drawmode.ts for any format that writes to disk
-    // Wrapped in try/catch — sidecar is a convenience, should never fail the render
     if (fs && filePaths.length > 0) {
       try {
         const basePath = (opts?.path ?? "diagram").replace(/\.(excalidraw|png|svg)$/, "");
@@ -1576,6 +2268,12 @@ export class Diagram {
 
   /** Convert the graph to Excalidraw elements with layout. */
   private async buildElements(warnings?: string[]): Promise<ExcalidrawElement[]> {
+    // Deferred linkup: connect / addLane / addGroup etc. just record raw
+    // refs. This pass resolves them all against the final node set, drops
+    // anything unresolvable, and row-locks lane members. After this call
+    // every edge.from/to / lane.children / group.children is a real node id.
+    this.resolveDeferred();
+
     if (this.diagramType === "sequence") {
       return this.buildSequenceElements();
     }
@@ -1586,55 +2284,214 @@ export class Diagram {
     // Nudge text nodes that overlap with box nodes
     resolveTextBoxOverlaps(positioned);
 
-    // Nudge non-member nodes out of group bounding boxes when Graphviz clusters
-    // are skipped (e.g. due to row constraints). Graphviz clusters handle
-    // containment properly, but without clusters nodes may overlap group boxes.
-    if (!groupBounds && this.groups.size > 0) {
-      for (const [_groupId, group] of this.groups) {
-        const childNodes = group.children
-          .map(c => positioned.get(c))
-          .filter((n): n is PositionedNode => n !== undefined);
-        if (childNodes.length === 0) continue;
-
-        const padding = group.opts?.padding ?? 30;
-        const allBounds = childNodes.map(n => ({ x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height }));
-        const { minX, minY, maxX, maxY } = computeNodeBounds(allBounds);
-        const gx = minX - padding;
-        const gy = minY - padding - 20;
-        const gw = (maxX + padding) - gx;
-        const gh = (maxY + padding) - gy;
-
-        // Check every non-member node
-        const childSet = new Set(group.children);
-        for (const [nodeId, node] of positioned) {
-          if (childSet.has(nodeId)) continue;
-          const nx = node.x ?? 0, ny = node.y ?? 0;
-          if (!rectsOverlap(gx, gy, gw, gh, nx, ny, node.width, node.height, 5)) continue;
-
-          // Find smallest displacement to push node outside group bbox
-          const pushLeft = (gx - 5) - (nx + node.width);
-          const pushRight = (gx + gw + 5) - nx;
-          const pushUp = (gy - 5) - (ny + node.height);
-          const pushDown = (gy + gh + 5) - ny;
-
-          // Pick smallest absolute displacement
-          const candidates = [
-            { dx: pushLeft, dy: 0 },
-            { dx: pushRight, dy: 0 },
-            { dx: 0, dy: pushUp },
-            { dx: 0, dy: pushDown },
-          ];
-          candidates.sort((a, b) => (Math.abs(a.dx) + Math.abs(a.dy)) - (Math.abs(b.dx) + Math.abs(b.dy)));
-          node.x = nx + candidates[0].dx;
-          node.y = ny + candidates[0].dy;
-        }
-      }
-    }
+    // NOTE: there used to be a "nudge non-member nodes out of group bounding
+    // boxes" pass here. It was the root cause of every "addGroup breaks arrow
+    // alignment" bug — it mutated node.x/y after graphviz had already computed
+    // the edge routes against the pre-nudge positions, so every arrow touching
+    // a nudged node ended up pointing at coordinates that no longer existed.
+    //
+    // The nudge tried to solve a purely visual problem (non-member nodes sitting
+    // inside the bounding box we draw around a group's members) and created a
+    // structural one (arrows and boxes drawn from different coordinate frames).
+    // Dropping it keeps node positions consistent with graphviz's edge routes.
+    // If a non-member does end up inside a group rect, that's a visual artifact
+    // we can address with a real fix (either patch the Zig layout to route
+    // edges against pinned positions, or compute a group rect that excludes
+    // non-members) instead of mutating the layout after the fact.
 
     // Pre-compute arrow IDs (one per edge, in order)
     const arrowIds: string[] = [];
     for (let i = 0; i < this.edges.length; i++) {
       arrowIds.push(this.nextId("arr"));
+    }
+
+    // Render swimlane backgrounds BEFORE shape elements so the lane band
+    // sits behind its members. Each lane spans the full diagram width
+    // (computed from the union of all positioned nodes) and the vertical
+    // band of its own children.
+    if (this.lanes.size > 0) {
+      // Total horizontal extent of the diagram = leftmost node X to
+      // rightmost node X+width. Lanes get a 60px header zone on the left
+      // for the lane label.
+      let diagramMinX = Infinity, diagramMaxX = -Infinity;
+      for (const node of positioned.values()) {
+        if (node.x === undefined) continue;
+        if (node.x < diagramMinX) diagramMinX = node.x;
+        if (node.x + node.width > diagramMaxX) diagramMaxX = node.x + node.width;
+      }
+      const LANE_HEADER_WIDTH = 80;
+      const LANE_HORIZONTAL_PADDING = 30;
+      const LANE_VERTICAL_PADDING = 20;
+      const laneStartX = diagramMinX - LANE_HEADER_WIDTH - LANE_HORIZONTAL_PADDING;
+      const laneEndX = diagramMaxX + LANE_HORIZONTAL_PADDING;
+      const laneWidth = laneEndX - laneStartX;
+
+      // Sort lanes by index so they render in declared order.
+      const sortedLanes = [...this.lanes.entries()].sort((a, b) => a[1].index - b[1].index);
+
+      // Two-pass layout: first resolve each lane's Y band. Populated lanes
+      // use their children's bbox; empty lanes are slotted in at a Y
+      // derived from their neighbours so the diagram still shows them as
+      // horizontal bands (previously they were skipped entirely, which
+      // compressed 5-lane swimlanes down to however-many-got-populated
+      // and didn't look like a swimlane at all).
+      const populatedRanges: Array<{ index: number; minY: number; maxY: number }> = [];
+      for (const [laneId, lane] of sortedLanes) {
+        let laneMinY = Infinity, laneMaxY = -Infinity;
+        for (const childId of lane.children) {
+          const child = positioned.get(childId);
+          if (!child || child.y === undefined) continue;
+          if (child.y < laneMinY) laneMinY = child.y;
+          if (child.y + child.height > laneMaxY) laneMaxY = child.y + child.height;
+        }
+        if (laneMinY !== Infinity) {
+          populatedRanges.push({ index: lane.index, minY: laneMinY, maxY: laneMaxY });
+        }
+      }
+      // Average height of the populated lanes — used as the default slot
+      // size for empty lanes so visual density stays consistent.
+      const avgPopulatedHeight = populatedRanges.length > 0
+        ? populatedRanges.reduce((s, r) => s + (r.maxY - r.minY), 0) / populatedRanges.length
+        : 80;
+      const DEFAULT_EMPTY_HEIGHT = Math.max(60, avgPopulatedHeight);
+
+      for (const [laneId, lane] of sortedLanes) {
+        let laneMinY = Infinity, laneMaxY = -Infinity;
+        for (const childId of lane.children) {
+          const child = positioned.get(childId);
+          if (!child || child.y === undefined) continue;
+          if (child.y < laneMinY) laneMinY = child.y;
+          if (child.y + child.height > laneMaxY) laneMaxY = child.y + child.height;
+        }
+        if (laneMinY === Infinity) {
+          // Empty lane — position from neighbour bands. Find the nearest
+          // populated lane below (higher index) and above (lower index);
+          // slot this one between them. If we're at the bottom with no
+          // lower-index neighbour, stack beneath the previous band.
+          let topY: number;
+          const below = populatedRanges.find(r => r.index > lane.index);
+          const aboveCandidate = [...populatedRanges].reverse().find(r => r.index < lane.index);
+          if (aboveCandidate) {
+            topY = aboveCandidate.maxY + LANE_VERTICAL_PADDING * 2;
+          } else if (below) {
+            topY = below.minY - DEFAULT_EMPTY_HEIGHT - LANE_VERTICAL_PADDING * 2;
+          } else {
+            // Entirely empty diagram — nothing anchored. Skip; there's
+            // no meaningful Y to place this at.
+            continue;
+          }
+          laneMinY = topY;
+          laneMaxY = topY + DEFAULT_EMPTY_HEIGHT;
+          populatedRanges.push({ index: lane.index, minY: laneMinY, maxY: laneMaxY });
+          populatedRanges.sort((a, b) => a.index - b.index);
+        }
+
+        const laneY = laneMinY - LANE_VERTICAL_PADDING;
+        const laneHeight = (laneMaxY - laneMinY) + LANE_VERTICAL_PADDING * 2;
+
+        // 1. Background band — a low-opacity rectangle spanning the row.
+        elements.push({
+          id: laneId,
+          type: "rectangle",
+          x: laneStartX, y: laneY,
+          width: laneWidth, height: laneHeight,
+          backgroundColor: lane.opts?.strokeColor ?? "#e7f5ff",
+          strokeColor: lane.opts?.strokeColor ?? "#74c0fc",
+          fillStyle: "solid",
+          strokeWidth: 1,
+          strokeStyle: lane.opts?.strokeStyle ?? "solid",
+          roughness: 0,
+          opacity: lane.opts?.opacity ?? 30,
+          angle: 0,
+          roundness: { type: 3 },
+          boundElements: null,
+          groupIds: [],
+          frameId: null,
+          isDeleted: false,
+          updated: Date.now(),
+          locked: false,
+          link: null,
+          // Same rationale as the addGroup rectangle — lanes are structural,
+          // not addressable edge endpoints, so orphan detection must skip
+          // them. Re-use the `_group` flag rather than invent a second one.
+          customData: { _group: true },
+          seed: randSeed(),
+          version: 1,
+          versionNonce: randSeed(),
+        });
+
+        // 2. Header zone — a slightly darker rectangle on the left edge
+        // that holds the lane label vertically centered. Drawn AFTER the
+        // background so it sits on top.
+        elements.push({
+          id: `${laneId}-header-bg`,
+          type: "rectangle",
+          x: laneStartX, y: laneY,
+          width: LANE_HEADER_WIDTH, height: laneHeight,
+          backgroundColor: lane.opts?.strokeColor ?? "#74c0fc",
+          strokeColor: lane.opts?.strokeColor ?? "#74c0fc",
+          fillStyle: "solid",
+          strokeWidth: 1,
+          strokeStyle: "solid",
+          roughness: 0,
+          opacity: lane.opts?.opacity ?? 60,
+          angle: 0,
+          roundness: { type: 3 },
+          boundElements: null,
+          groupIds: [],
+          frameId: null,
+          isDeleted: false,
+          updated: Date.now(),
+          locked: false,
+          link: null,
+          // Mark structural so orphan detection skips it. Without this flag
+          // the header-bg rectangle looks like a regular node to
+          // detectOrphanNodes — it has no customData._from/_to references
+          // pointing at its id, so it gets reported as "orphan" every time,
+          // triggering a retry loop on every swimlane diagram.
+          customData: { _group: true },
+          seed: randSeed(),
+          version: 1,
+          versionNonce: randSeed(),
+        });
+
+        // 3. Lane label text — centered in the header zone.
+        const labelMeasured = measureText(lane.name, 16, 1);
+        elements.push({
+          id: `${laneId}-label`,
+          type: "text",
+          x: laneStartX + (LANE_HEADER_WIDTH - labelMeasured.width) / 2,
+          y: laneY + (laneHeight - labelMeasured.height) / 2,
+          width: labelMeasured.width,
+          height: labelMeasured.height,
+          text: lane.name,
+          fontSize: 16,
+          fontFamily: 1,
+          lineHeight: getLineHeight(1),
+          textAlign: "center",
+          verticalAlign: "middle",
+          containerId: null,
+          originalText: lane.name,
+          autoResize: true,
+          strokeColor: "#1e1e1e",
+          backgroundColor: "transparent",
+          fillStyle: "solid",
+          strokeWidth: 1,
+          roughness: 0,
+          opacity: 100,
+          angle: 0,
+          groupIds: [],
+          frameId: null,
+          isDeleted: false,
+          boundElements: null,
+          updated: Date.now(),
+          locked: false,
+          link: null,
+          seed: randSeed(),
+          version: 1,
+          versionNonce: randSeed(),
+        });
+      }
     }
 
     // Create shape + bound text for each node
@@ -1716,6 +2573,40 @@ export class Diagram {
         continue;
       }
 
+      // Table (ER) and class (UML) — compound shapes that share the same
+      // multi-row layout: outer rectangle, header text, one text element per
+      // body row, and dividers between sections. Graphviz laid each one out
+      // as one node so x/y/width/height refer to the bounding rect.
+      if ((node.type === "table" && node.tableColumns) || node.type === "class") {
+        const compoundRows: { text: string; align: "left" | "center" }[] = [];
+        const thickDividerAfter = new Set<number>();
+
+        if (node.type === "table") {
+          // [0] header (centered) — thick divider after — [1..N] columns (left)
+          compoundRows.push({ text: node.label, align: "center" });
+          thickDividerAfter.add(0);
+          for (const col of node.tableColumns!) {
+            compoundRows.push({ text: Diagram.formatTableRow(col), align: "left" });
+          }
+        } else {
+          // class: header (centered) → thick divider → attributes (left) →
+          // thick divider → methods (left). When only one of attributes or
+          // methods is set, the second thick divider is omitted because
+          // there's no boundary to draw — the single section sits directly
+          // beneath the header.
+          const attrs = node.classAttributes ?? [];
+          const methods = node.classMethods ?? [];
+          compoundRows.push({ text: node.label, align: "center" });
+          thickDividerAfter.add(0);
+          for (const a of attrs) compoundRows.push({ text: Diagram.formatClassMember(a), align: "left" });
+          if (attrs.length > 0 && methods.length > 0) thickDividerAfter.add(attrs.length);
+          for (const m of methods) compoundRows.push({ text: Diagram.formatClassMember(m), align: "left" });
+        }
+
+        Diagram.emitCompoundNode(elements, node, compoundRows, thickDividerAfter, o);
+        continue;
+      }
+
       // Rectangle / Ellipse
       const textId = `${node.id}-text`;
 
@@ -1750,7 +2641,11 @@ export class Diagram {
 
       const textWidth = node.width - 20;
       const boundFf: FontFamily = o?.fontFamily ?? 1;
-      const textMeasured = measureText(node.label, o?.fontSize ?? 16, boundFf);
+      // Rendered text is displayLabel when an icon was set, otherwise the
+      // canonical label. Measurement, text, and originalText must all match
+      // what actually gets drawn or Excalidraw will misalign the bound text.
+      const renderedText = node.displayLabel ?? node.label;
+      const textMeasured = measureText(renderedText, o?.fontSize ?? 16, boundFf);
       const textHeight = Math.max(20, textMeasured.height);
 
       elements.push({
@@ -1760,14 +2655,14 @@ export class Diagram {
         y: node.y! + (node.height - textHeight) / 2,
         width: textWidth,
         height: textHeight,
-        text: node.label,
+        text: renderedText,
         fontSize: o?.fontSize ?? 16,
         fontFamily: boundFf,
         lineHeight: getLineHeight(boundFf),
         textAlign: o?.textAlign ?? "center",
         verticalAlign: o?.verticalAlign ?? "middle",
         containerId: node.id,
-        originalText: node.label,
+        originalText: renderedText,
         autoResize: true,
         strokeColor: o?.strokeColor ?? node.color.stroke,
         backgroundColor: "transparent",
@@ -1893,7 +2788,22 @@ export class Diagram {
       const boundsWidth = bMaxX - bMinX;
       const boundsHeight = bMaxY - bMinY;
 
-      const labelTextId = edge.label ? this.nextId("arrlbl") : undefined;
+      // Compose the displayed edge label. ER cardinality (if set) is prefixed
+      // to whatever the user passed as the label so "1:N" sits next to the
+      // verb describing the relationship.
+      const cardinality = co?.cardinality;
+      const effectiveLabel = cardinality
+        ? (edge.label ? `${cardinality}  ${edge.label}` : cardinality)
+        : edge.label;
+      const labelTextId = effectiveLabel ? this.nextId("arrlbl") : undefined;
+
+      // UML relation overrides the explicit start/end arrowheads + style
+      // when set. This keeps the model from having to remember which
+      // arrowhead means inheritance vs composition vs aggregation.
+      const relationArrows = co?.relation ? Diagram.relationArrowheads(co.relation) : null;
+      const effectiveStartArrow = relationArrows ? relationArrows.startArrowhead : (co?.startArrowhead ?? null);
+      const effectiveEndArrow = relationArrows ? relationArrows.endArrowhead : (co?.endArrowhead !== undefined ? co.endArrowhead : "arrow");
+      const effectiveStrokeStyle = relationArrows ? relationArrows.style : edge.style;
 
       elements.push({
         id: arrowId,
@@ -1907,7 +2817,7 @@ export class Diagram {
         backgroundColor: "transparent",
         fillStyle: "solid",
         strokeWidth: co?.strokeWidth ?? 2,
-        strokeStyle: edge.style,
+        strokeStyle: effectiveStrokeStyle,
         roughness: co?.roughness ?? 0,
         roundness: null,
         elbowed: isElbowed,
@@ -1915,8 +2825,8 @@ export class Diagram {
         angle: 0,
         startBinding: null,
         endBinding: null,
-        startArrowhead: co?.startArrowhead ?? null,
-        endArrowhead: co?.endArrowhead !== undefined ? co.endArrowhead : "arrow",
+        startArrowhead: effectiveStartArrow,
+        endArrowhead: effectiveEndArrow,
         groupIds: [],
         frameId: null,
         isDeleted: false,
@@ -1931,8 +2841,8 @@ export class Diagram {
       });
 
       // Arrow label placement
-      if (edge.label && labelTextId) {
-        const labelWidth = measureText(edge.label, co?.labelFontSize ?? 14, 1).width + 16;
+      if (effectiveLabel && labelTextId) {
+        const labelWidth = measureText(effectiveLabel, co?.labelFontSize ?? 14, 1).width + 16;
         let labelX: number, labelY: number;
         const labelPos = co?.labelPosition ?? "middle";
 
@@ -1974,14 +2884,14 @@ export class Diagram {
           y: labelY,
           width: labelWidth,
           height: 20,
-          text: edge.label,
+          text: effectiveLabel,
           fontSize: co?.labelFontSize ?? 14,
           fontFamily: labelFf,
           lineHeight: getLineHeight(labelFf),
           textAlign: "center",
           verticalAlign: "middle",
           containerId: null,
-          originalText: edge.label,
+          originalText: effectiveLabel,
           autoResize: true,
           strokeColor: "#1e1e1e",
           backgroundColor: "transparent",
@@ -2081,6 +2991,11 @@ export class Diagram {
         updated: Date.now(),
         locked: false,
         link: null,
+        // Marker so downstream consumers (notably the orphan detector in
+        // demo/src/draw/main.ts) can skip group containers — they're
+        // decorative frames, not edge endpoints, so it's always invalid to
+        // flag them as "unconnected nodes".
+        customData: { _group: true },
         seed: randSeed(),
         version: 1,
         versionNonce: randSeed(),
@@ -2204,8 +3119,8 @@ export class Diagram {
         type: "rectangle",
         x, y: BASE_Y,
         width: SEQ_ACTOR_WIDTH, height: SEQ_ACTOR_HEIGHT,
-        backgroundColor: actor.opts?.backgroundColor ?? COLOR_PALETTE[actor.opts?.color ?? "backend"].background,
-        strokeColor: actor.opts?.strokeColor ?? COLOR_PALETTE[actor.opts?.color ?? "backend"].stroke,
+        backgroundColor: actor.opts?.backgroundColor ?? (COLOR_PALETTE[actor.opts?.color ?? "backend"] ?? COLOR_PALETTE["backend"]).background,
+        strokeColor: actor.opts?.strokeColor ?? (COLOR_PALETTE[actor.opts?.color ?? "backend"] ?? COLOR_PALETTE["backend"]).stroke,
         fillStyle: "solid", strokeWidth: 2, roughness: 1, opacity: 100,
         angle: 0, strokeStyle: "solid",
         roundness: { type: 3 },
@@ -2228,7 +3143,7 @@ export class Diagram {
         lineHeight: getLineHeight(ff), textAlign: "center" as TextAlign,
         verticalAlign: "middle" as VerticalAlign,
         containerId: actor.id, originalText: actor.label, autoResize: true,
-        strokeColor: COLOR_PALETTE[actor.opts?.color ?? "backend"].stroke,
+        strokeColor: (COLOR_PALETTE[actor.opts?.color ?? "backend"] ?? COLOR_PALETTE["backend"]).stroke,
         backgroundColor: "transparent", fillStyle: "solid",
         strokeWidth: 1, roughness: 0, opacity: 100, angle: 0,
         groupIds: [], frameId: null, isDeleted: false,
@@ -2280,6 +3195,12 @@ export class Diagram {
       const endArrowhead: Arrowhead = msg.opts?.endArrowhead ?? "arrow";
       const startArrowhead: Arrowhead = msg.opts?.startArrowhead ?? null;
 
+      // Stamp the endpoint actor ids in customData so downstream consumers
+      // (orphan detection, graph introspection) can see the message → actor
+      // reference without re-deriving it from pixel positions. Matches the
+      // customData._from / _to convention used by architecture edges at
+      // buildElements (~line 2520).
+      const seqEdgeCustom = { _from: msg.from, _to: msg.to };
       if (isSelf) {
         // Self-message: rectangular loop on the right side
         const loopWidth = 40;
@@ -2300,6 +3221,7 @@ export class Diagram {
           elbowed: false,
           groupIds: [], frameId: null, isDeleted: false,
           boundElements: null, updated: Date.now(), locked: false, link: null,
+          customData: seqEdgeCustom,
           seed: randSeed(), version: 1, versionNonce: randSeed(),
         });
       } else {
@@ -2320,6 +3242,7 @@ export class Diagram {
           elbowed: false,
           groupIds: [], frameId: null, isDeleted: false,
           boundElements: null, updated: Date.now(), locked: false, link: null,
+          customData: seqEdgeCustom,
           seed: randSeed(), version: 1, versionNonce: randSeed(),
         });
       }
@@ -2367,7 +3290,7 @@ export class Diagram {
     if (wasmResult) return wasmResult;
     // No shape nodes to lay out (text-only / line-only diagrams) — return empty positions
     const hasShapes = Array.from(this.nodes.values()).some(
-      n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond",
+      n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond" || n.type === "table" || n.type === "class",
     );
     if (!hasShapes) return { positioned: this.applyPositions([]) };
     throw new Error("Graphviz WASM layout failed. Ensure WASM module is built and loaded.");
@@ -2376,8 +3299,11 @@ export class Diagram {
   private async layoutNodesWasm(): Promise<{ positioned: Map<string, PositionedNode>; edgeRoutes: Map<string, EdgeRoute>; groupBounds?: GroupBounds[] } | null> {
     // Auto-load WASM on first use (ensures Graphviz layout works for direct SDK imports)
     if (!isWasmLoaded()) await loadWasm();
+    // Tables and classes are compound primitives but graphviz still treats
+    // them as one node sized by the outer rectangle, so include them
+    // alongside the simple shapes in the layout filter.
     const graphNodes = Array.from(this.nodes.values()).filter(
-      n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond",
+      n => n.type === "rectangle" || n.type === "ellipse" || n.type === "diamond" || n.type === "table" || n.type === "class",
     );
     if (graphNodes.length === 0) return null;
 
@@ -2418,37 +3344,57 @@ export class Diagram {
     const hasRowConstraints = wasmNodes.some(n => n.row !== undefined);
     const effectiveGroups = hasRowConstraints ? undefined : (wasmGroups.length > 0 ? wasmGroups : undefined);
 
-    const result = await layoutGraphWasm(wasmNodes, wasmEdges, effectiveGroups, { rankdir: this.direction, engine: allAbsolute ? "nop2" : "dot" });
+    // Pick layout engine. `dot` is a hierarchical Sugiyama layout — ideal for
+    // DAGs (architecture, flowchart, ER) but its routing of cycle-closing
+    // back-edges in LR mode runs long curves through the middle of the chart
+    // and overlaps node labels. `circo` is a circular layout — every edge is
+    // short and roughly tangent to the cycle, no back-edges by construction.
+    // Heuristic: if every node is an ellipse and there are no row/col grid
+    // constraints, treat it as a state machine and use circo.
+    let engine = allAbsolute ? "nop2" : "dot";
+    const allEllipses = wasmNodes.length > 0 && wasmNodes.every(n => n.type === "ellipse");
+    if (allEllipses && !hasRowConstraints) engine = "circo";
+
+    const result = await layoutGraphWasm(wasmNodes, wasmEdges, effectiveGroups, { rankdir: this.direction, engine });
+    // Remember which engine ran so the back-edge sanitizer below knows to
+    // skip itself for circo (whose radial layout legitimately produces
+    // edges going in all four directions).
+    const engineUsed = engine;
     if (!result) return null;
 
     const positioned = this.applyPositions(result.nodes);
 
-    // Sanitize edge routes: detect and fix arrows that loop backwards or have teardrop artifacts
-    for (const [key, route] of result.edgeRoutes) {
-      if (route.points.length < 2) continue;
-      const parts = key.split("->");
-      const fromId = parts[0];
-      const toId = (parts[1] ?? "").replace(/#\d+$/, "");
-      const fromNode = positioned.get(fromId);
-      const toNode = positioned.get(toId);
-      if (!fromNode || !toNode) continue;
+    // Sanitize edge routes: detect dot's back-edge teardrop artifacts (arrows
+    // whose X goes backward in LR layout) and replace them with a clean
+    // orthogonal detour. SKIPPED for circo — circular layouts produce edges
+    // legitimately going in every direction, and collapsing them to
+    // orthogonal would destroy the whole point of the radial routing.
+    if (engineUsed !== "circo") {
+      for (const [key, route] of result.edgeRoutes) {
+        if (route.points.length < 2) continue;
+        const parts = key.split("->");
+        const fromId = parts[0];
+        const toId = (parts[1] ?? "").replace(/#\d+$/, "");
+        const fromNode = positioned.get(fromId);
+        const toNode = positioned.get(toId);
+        if (!fromNode || !toNode) continue;
 
-      if (isHorizontal) {
-        // For LR, arrow X should be monotonically increasing
-        let looping = false;
-        for (let i = 1; i < route.points.length; i++) {
-          if (route.points[i][0] < route.points[0][0] - 5) { looping = true; break; }
-        }
-        if (looping) {
-          const fx = (fromNode.x ?? 0) + fromNode.width;
-          const fy = (fromNode.y ?? 0) + fromNode.height / 2;
-          const tx = (toNode.x ?? 0);
-          const ty = (toNode.y ?? 0) + toNode.height / 2;
-          const midX = Math.round((fx + tx) / 2);
-          route.points = Math.abs(fy - ty) < 1
-            ? [[fx, fy], [tx, ty]]
-            : [[fx, fy], [midX, fy], [midX, ty], [tx, ty]];
-          route.labelPos = { x: Math.round((fx + tx) / 2), y: Math.round((fy + ty) / 2) - 15 };
+        if (isHorizontal) {
+          let looping = false;
+          for (let i = 1; i < route.points.length; i++) {
+            if (route.points[i][0] < route.points[0][0] - 5) { looping = true; break; }
+          }
+          if (looping) {
+            const fx = (fromNode.x ?? 0) + fromNode.width;
+            const fy = (fromNode.y ?? 0) + fromNode.height / 2;
+            const tx = (toNode.x ?? 0);
+            const ty = (toNode.y ?? 0) + toNode.height / 2;
+            const midX = Math.round((fx + tx) / 2);
+            route.points = Math.abs(fy - ty) < 1
+              ? [[fx, fy], [tx, ty]]
+              : [[fx, fy], [midX, fy], [midX, ty], [tx, ty]];
+            route.labelPos = { x: Math.round((fx + tx) / 2), y: Math.round((fy + ty) / 2) - 15 };
+          }
         }
       }
     }
@@ -2510,7 +3456,7 @@ export class Diagram {
 /** Resolve color from opts: hex overrides > preset > default */
 function resolveColor(opts?: ShapeOpts, defaultPreset: ColorPreset = "backend"): ColorPair {
   const preset = opts?.color ?? defaultPreset;
-  const palette = COLOR_PALETTE[preset];
+  const palette = COLOR_PALETTE[preset] ?? COLOR_PALETTE["backend"];
   return {
     background: opts?.backgroundColor ?? palette.background,
     stroke: opts?.strokeColor ?? palette.stroke,

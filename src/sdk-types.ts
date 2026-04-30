@@ -13,6 +13,10 @@ type ColorPreset =
   | "azure-compute" | "azure-data" | "azure-network" | "azure-ai"
   | "gcp-compute" | "gcp-data" | "gcp-network" | "gcp-ai"
   | "k8s-pod" | "k8s-service" | "k8s-ingress" | "k8s-volume";
+type Cardinality = "1:1" | "1:N" | "N:1" | "N:M";
+type Relation = "inheritance" | "composition" | "aggregation" | "dependency" | "association";
+type Visibility = "public" | "private" | "protected" | "package";
+type DiagramType = "architecture" | "sequence" | "flowchart" | "state" | "orgchart" | "er" | "class" | "swimlane";
 
 interface ShapeOpts {
   row?: number; col?: number;          // grid position (280px cols, 220px rows)
@@ -28,6 +32,9 @@ interface ShapeOpts {
   icon?: string;  // "lambda","docker","database","db","cloud","lock","globe","server","api","queue","cache","storage","user","users","warning","check","fire","key","mail","search","kubernetes","k8s" or emoji
 }
 
+interface TableColumn { name: string; type?: string; key?: "PK" | "FK" }
+interface ClassMember { name: string; type?: string; visibility?: Visibility }
+
 interface ConnectOpts {
   style?: StrokeStyle; strokeColor?: string; strokeWidth?: number;
   roughness?: number; opacity?: number;
@@ -35,19 +42,25 @@ interface ConnectOpts {
   elbowed?: boolean; labelFontSize?: number;
   labelPosition?: "start" | "middle" | "end";
   customData?: Record<string, unknown> | null;
+  cardinality?: Cardinality;  // ER: prepended to edge label
+  relation?: Relation;        // UML: auto-picks arrowheads + style
 }
 
 declare class Diagram {
-  constructor(opts?: { theme?: "default" | "sketch" | "blueprint" | "minimal"; direction?: "TB" | "LR" | "RL" | "BT"; type?: "architecture" | "sequence" });
+  constructor(opts?: { theme?: "default" | "sketch" | "blueprint" | "minimal"; direction?: "TB" | "LR" | "RL" | "BT"; type?: DiagramType });
   setTheme(theme: "default" | "sketch" | "blueprint" | "minimal"): void;
   setDirection(direction: "TB" | "LR" | "RL" | "BT"): void;
+  setType(type: DiagramType): void;
 
   addBox(label: string, opts?: ShapeOpts): string;
   addEllipse(label: string, opts?: ShapeOpts): string;
   addDiamond(label: string, opts?: ShapeOpts): string;
+  addTable(name: string, columns: TableColumn[], opts?: ShapeOpts): string;
+  addClass(name: string, members: { attributes?: ClassMember[]; methods?: ClassMember[] }, opts?: ShapeOpts): string;
   addText(text: string, opts?: { x?: number; y?: number; fontSize?: number; fontFamily?: FontFamily; color?: ColorPreset; strokeColor?: string }): string;
   addLine(points: [number, number][], opts?: { strokeColor?: string; strokeWidth?: number; strokeStyle?: StrokeStyle }): string;
   addGroup(label: string, children: string[], opts?: { padding?: number; strokeColor?: string; strokeStyle?: StrokeStyle; opacity?: number }): string;
+  addLane(name: string, children: string[], opts?: { padding?: number; strokeColor?: string; strokeStyle?: StrokeStyle; opacity?: number }): string;
   addFrame(name: string, children: string[]): string;
   removeGroup(id: string): void;
   removeFrame(id: string): void;
@@ -61,7 +74,7 @@ declare class Diagram {
   findByLabel(label: string, opts?: { exact?: boolean }): string[];
   getNodes(): string[];
   getEdges(): Array<{ from: string; to: string; label?: string }>;
-  getNode(id: string): { label: string; type: string; width: number; height: number; backgroundColor?: string; strokeColor?: string; row?: number; col?: number } | undefined;
+  getNode(idOrLabel: string): { id: string; label: string; type: string; width: number; height: number; backgroundColor?: string; strokeColor?: string; row?: number; col?: number } | undefined;
 
   addActor(label: string, opts?: ShapeOpts): string;
   message(from: string, to: string, label?: string, opts?: ConnectOpts): void;

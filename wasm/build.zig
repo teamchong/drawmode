@@ -151,6 +151,17 @@ const graphviz_c_sources = [_][]const u8{
     "plugin/neato_layout/gvplugin_neato_layout.c",
     "plugin/dot_layout/gvlayout_dot_layout.c",
     "plugin/dot_layout/gvplugin_dot_layout.c",
+    // circo layout engine (radial layout for cyclic graphs / state machines)
+    "lib/circogen/block.c",
+    "lib/circogen/blockpath.c",
+    "lib/circogen/blocktree.c",
+    "lib/circogen/circpos.c",
+    "lib/circogen/circular.c",
+    "lib/circogen/circularinit.c",
+    "lib/circogen/edgelist.c",
+    "lib/circogen/nodelist.c",
+    "plugin/circo_layout/gvlayout_circo_layout.c",
+    "plugin/circo_layout/gvplugin_circo_layout.c",
     "wasm_platform/gviz_bridge.c",
     "wasm_platform/neato_compat.c",
 };
@@ -245,7 +256,7 @@ pub fn build(b: *std.Build) void {
 
     // Add Graphviz C source files
     const graphviz_root = b.path("vendor/graphviz");
-    wasm.addCSourceFiles(.{
+    wasm.root_module.addCSourceFiles(.{
         .root = graphviz_root,
         .files = &graphviz_c_sources,
         .flags = &graphviz_c_flags,
@@ -255,9 +266,9 @@ pub fn build(b: *std.Build) void {
     // - vendor/graphviz/ for "config.h"
     // - vendor/graphviz/lib/ for <cgraph/cgraph.h>, <gvc/gvc.h>, etc.
     // - per-library dirs for internal includes like <cgraph.h>, <cdt.h>, <pathgeom.h>
-    wasm.addIncludePath(b.path("vendor/graphviz"));
-    wasm.addIncludePath(b.path("vendor/graphviz/lib"));
-    wasm.addIncludePath(b.path("vendor/graphviz/plugin"));
+    wasm.root_module.addIncludePath(b.path("vendor/graphviz"));
+    wasm.root_module.addIncludePath(b.path("vendor/graphviz/lib"));
+    wasm.root_module.addIncludePath(b.path("vendor/graphviz/plugin"));
     // Internal headers reference siblings without directory prefix
     const lib_subdirs = [_][]const u8{
         "vendor/graphviz/lib/cdt",
@@ -280,27 +291,27 @@ pub fn build(b: *std.Build) void {
         "vendor/graphviz/lib/sfdpgen",
     };
     for (lib_subdirs) |subdir| {
-        wasm.addIncludePath(b.path(subdir));
+        wasm.root_module.addIncludePath(b.path(subdir));
     }
 
     // Add PlutoVG C source files (2D vector graphics)
     const plutovg_root = b.path("vendor/plutovg");
-    wasm.addCSourceFiles(.{
+    wasm.root_module.addCSourceFiles(.{
         .root = plutovg_root,
         .files = &plutovg_c_sources,
         .flags = &pluto_c_flags,
     });
-    wasm.addIncludePath(b.path("vendor/plutovg/include"));
-    wasm.addIncludePath(b.path("vendor/plutovg/source"));
+    wasm.root_module.addIncludePath(b.path("vendor/plutovg/include"));
+    wasm.root_module.addIncludePath(b.path("vendor/plutovg/source"));
 
     // Add PlutoSVG C source files (SVG renderer)
     const plutosvg_root = b.path("vendor/plutosvg");
-    wasm.addCSourceFiles(.{
+    wasm.root_module.addCSourceFiles(.{
         .root = plutosvg_root,
         .files = &plutosvg_c_sources,
         .flags = &pluto_c_flags,
     });
-    wasm.addIncludePath(b.path("vendor/plutosvg/source"));
+    wasm.root_module.addIncludePath(b.path("vendor/plutosvg/source"));
 
     const install_wasm = b.addInstallArtifact(wasm, .{});
     b.getInstallStep().dependOn(&install_wasm.step);
