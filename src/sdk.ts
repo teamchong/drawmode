@@ -1949,7 +1949,12 @@ export class Diagram {
     backgroundColor?: string; strokeColor?: string;
     row?: number; col?: number;
   } | undefined {
-    const id = this._resolveNodeRef(idOrLabel);
+    // Try as ID first; fall back to exact label match.
+    let id = this._resolveNodeRef(idOrLabel);
+    if (!id) {
+      const matches = this.findByLabel(idOrLabel, { exact: true });
+      if (matches.length > 0) id = matches[0];
+    }
     if (!id) return undefined;
     const node = this.nodes.get(id);
     if (!node) return undefined;
