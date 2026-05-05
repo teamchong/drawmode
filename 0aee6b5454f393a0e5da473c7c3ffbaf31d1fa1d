@@ -1,0 +1,23 @@
+.github/workflows/release.yml
+  ca2ca6223b43ba2f 56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "0aee6b5454f393a0e5da473c7c3ffbaf31d1fa1d",
+  "prompts": {
+    "ca2ca6223b43ba2f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_20c916562ffeeaBL1vkpc34HKM",
+        "model": "openai/gpt-5.5"
+      },
+      "human_author": "Steven",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
