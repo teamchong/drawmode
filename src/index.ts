@@ -44,37 +44,12 @@ function registerHandlers(server: McpServer): void {
 
   server.tool(
     "draw",
-    `Generate or edit an Excalidraw architecture diagram by writing TypeScript code.
+    `Generate or edit an Excalidraw diagram by writing TypeScript code using the Diagram SDK.
 
-${SDK_TYPES}
-
-Example — new diagram:
-\`\`\`typescript
-const d = new Diagram();
-const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
-const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
-const cache = d.addBox("Redis", { row: 1, col: 2, color: "cache" });
-d.connect(api, db, "queries");
-d.connect(api, cache, "reads", { style: "dashed" });
-d.addGroup("Data Layer", [db, cache]);
-return d.render({ format: "url" });
-\`\`\`
-
-Example — edit existing diagram (use draw_describe first to get the code):
-\`\`\`typescript
-const d = new Diagram();
-const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
-// ... modify from draw_describe output ...
-return d.render({ path: "diagram.excalidraw" });
-\`\`\`
-
-Labels support \\n for line breaks. To edit an existing diagram: call draw_describe to get TypeScript code, modify it, then pass to draw. A .drawmode.ts sidecar is also written alongside file output.`,
+Call draw_info for the full SDK reference. Code must create a Diagram and return d.render().`,
     {
       code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
-      format: z.union([
-        z.enum(["excalidraw", "url", "png", "svg"]),
-        z.array(z.enum(["excalidraw", "url", "png", "svg"])),
-      ]).default("excalidraw").describe("Output format. Pass an array like [\"excalidraw\", \"svg\"] for multiple outputs."),
+      format: z.enum(["excalidraw", "url", "png", "svg"]).default("excalidraw").describe("Output format."),
       path: z.string().optional().describe("File path for output (base name; extensions derived per format)"),
     },
     async ({ code, format, path }) => {

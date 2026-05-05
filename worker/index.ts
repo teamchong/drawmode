@@ -40,26 +40,9 @@ function createServer(): McpServer {
 
   server.tool(
     "draw",
-    `Generate or edit an Excalidraw architecture diagram by writing TypeScript code.
+    `Generate or edit an Excalidraw diagram by writing TypeScript code using the Diagram SDK.
 
-You have access to the \`Diagram\` class. Create a new diagram, add shapes, connect them, and return the render result.
-
-TypeScript types available:
-${SDK_TYPES}
-
-Example — new diagram:
-\`\`\`typescript
-const d = new Diagram();
-const api = d.addBox("API Gateway", { row: 0, col: 1, color: "backend" });
-const db = d.addBox("Postgres", { row: 1, col: 0, color: "database" });
-const cache = d.addBox("Redis", { row: 1, col: 2, color: "cache" });
-d.connect(api, db, "queries");
-d.connect(api, cache, "reads", { style: "dashed" });
-d.addGroup("Data Layer", [db, cache]);
-return d.render({ format: "url" });
-\`\`\`
-
-Grid layout: row 0 is top, col 0 is left. Elements auto-position if row/col omitted.`,
+Call draw_info for the full SDK reference. Code must create a Diagram and return d.render().`,
     {
       code: z.string().describe("TypeScript code using the Diagram class. Must return d.render()."),
       format: z.enum(["excalidraw", "url", "png"]).default("excalidraw").describe("Output format"),
